@@ -1,0 +1,44 @@
+# CMS Selectors Configuration
+# Extracted from actual CMS HTML dumps
+
+login:
+  # Role selection
+  role_dropdown_trigger: "button[role='combobox']"
+  role_options: "[role='option']"
+  role_text_selector: "span.font-medium"  # Role name is inside this span
+  
+  # Credentials
+  email_input: "input#email"
+  password_input: "input#password"
+  
+  # Submit
+  submit_button: "button[type='submit']"
+
+dashboard:
+  # Sidebar navigation (after login)
+  content_menu: "text='Content'"
+  articles_submenu: "text='Articles'"
+  create_article_btn: "text='Create Article'"
+
+article_form:
+  # Modal detection
+  modal: "[role='dialog']"
+  
+  # Form fields (by order in modal)
+  # Input 0 = Telugu Title, Input 1 = English Title
+  # Textarea 0 = Telugu Body, Textarea 1 = English Body
+  inputs: "input:visible"
+  textareas: "textarea:visible"
+  
+  # Category dropdown
+  category_trigger: "button:has-text('Select category')"
+  category_option: "[role='option']"
+  
+  # Image upload
+  file_input: "input[type='file']"
+  
+  # Publish
+  publish_button: "button:has-text('Publish')"
+
+verification:
+  success_toast: ".toast-success, text='successfully', text='published'"

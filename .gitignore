@@ -1,0 +1,41 @@
+# Environment and secrets
+.env
+.env.local
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# Playwright and browser
+.playwright/
+
+# Project artifacts
+artifacts/
+downloads/
+screenshots/
+*.log
+
+# SQLite (memory/blacklist DB if local)
+*.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Keep example env (no secrets)
+!env.example
