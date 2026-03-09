@@ -1,349 +1,532 @@
-"""
-HARDENED ORCHESTRATOR - Self-Correcting Execution Engine.
+﻿"""Multi-agent orchestrator with event resolution, category intelligence and image quality checks."""
 
-ARCHITECTURE:
-- Agent A (Intelligence): Generates validated ArticleData
-- Validation Gate: Ensures data is perfect
-- Agent B (Browser): Deterministic execution only
-
-RECOVERY RULES:
-- Never retry fill_form on dirty state
-- Never chain recoveries
-- Always classify failures
-- Always apply correct recovery action
-"""
+from __future__ import annotations
 
 import asyncio
-import os
-from datetime import datetime, timezone, timedelta
-from typing import Optional
+import re
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Tuple
+
+from config.settings import get_settings
+from core.cms import ArticleData, CMSPublisher
+from core.intelligence import CategoryDecider, Summarizer, TeluguWriter
+from core.media import ImageQualityPipeline
+from core.memory import AgentMemory
+from core.pipeline import BreakingNewsClassifier, EventResolver, MultiAgentIngestion, PipelineMetrics
+from core.validator import ArticleValidator
 from utils.logger import get_logger
 
-# Agent A: Intelligence (NO browser)
-from core.sources.timesofindia import TimesOfIndiaScraper
-from core.sources.thehindu import TheHinduScraper
-from core.intelligence import Summarizer, TeluguWriter, CategoryDecider
-from core.media import OGImageDownloader
 
-# Agent B: Browser Operator (NO intelligence)
-from core.cms import CMSPublisher, ArticleData
-from core.cms.image_finder import get_image_mode, find_and_download_in_new_tab
+PIPELINE_TO_CMS_CATEGORY = {
+    "business": "Business",
+    "tech": "Technology",
+    "international": "International",
+    "national": "National",
+    "environment": "Environment",
+    "crime": "Crime",
+    "sports": "Sports",
+}
 
-# Memory & Validation
-from core.memory import AgentMemory
-from utils.image_utils import meets_minimum_resolution
-from core.validator import (
-    ArticleValidator,
-    ValidationResult,
-    FailureType,
-    RecoveryAction,
-    RECOVERY_MATRIX
-)
+STOPWORDS = {
+    "the", "and", "with", "from", "into", "amid", "over", "after", "near", "their", "this", "that", "will",
+    "have", "has", "been", "about", "under", "into", "more", "than", "what", "when", "where", "which", "india",
+}
 
 
 class HardenedOrchestrator:
-    """
-    Self-correcting orchestrator with strict failure classification.
-    
-    Invariants:
-    1. Telugu content is NEVER corrupted (native setter only)
-    2. Empty fields are NEVER published (validation gate)
-    3. Dirty state is NEVER reused (reload on failure)
-    """
-    
     def __init__(self):
         self.logger = get_logger("orchestrator")
-        
-        # Agent A: Intelligence – India sources only (TOI, The Hindu; if no articles in 5 mins, switch source)
-        self.scrapers = [
-            ("Times of India", TimesOfIndiaScraper()),
-            ("The Hindu", TheHinduScraper()),
-        ]
-        self.scraper_index = 0
-        self._no_articles_wait_sec = 60
-        self._no_articles_max_waits = 5  # 5 mins then switch source
+        self.settings = get_settings()
+
+        self.publisher = CMSPublisher()
         self.summarizer = Summarizer()
         self.telugu_writer = TeluguWriter()
         self.category_decider = CategoryDecider()
-        self.image_downloader = OGImageDownloader()
-        
-        # Agent B: Browser Operator
-        self.publisher = CMSPublisher()
-        
-        # Shared State
-        self.memory = AgentMemory()
         self.validator = ArticleValidator()
-        
-        # Limits
-        self.max_articles = 5
-        self.max_login_retries = 2
+        self.memory = AgentMemory()
+
+        self.ingestion = MultiAgentIngestion(
+            category_sources=self.settings.category_sources,
+            max_links_per_source=self.settings.max_links_per_source,
+        )
+        self.resolver = EventResolver(
+            title_similarity=self.settings.resolver_title_similarity,
+            content_similarity=self.settings.resolver_content_similarity,
+            time_window_minutes=self.settings.resolver_time_window_minutes,
+        )
+        self.breaking = BreakingNewsClassifier(
+            source_credibility=self.settings.source_credibility,
+            min_sources=self.settings.breaking_min_sources,
+            max_window_minutes=self.settings.breaking_window_minutes,
+            confidence_threshold=self.settings.breaking_confidence_threshold,
+        )
+        self.image_pipeline = ImageQualityPipeline(
+            thresholds=self.settings.image_quality_thresholds,
+            download_dir="downloads/images",
+        )
+
+        self.publish_plan = self._normalize_publish_plan(self.settings.category_publish_plan)
+
         self.max_publish_retries = 2
-        # Real-time: only use articles from the last N hours (env: MAX_ARTICLE_AGE_HOURS, default 24)
-        try:
-            self.max_article_age_hours = int(os.environ.get("MAX_ARTICLE_AGE_HOURS", "24"))
-        except ValueError:
-            self.max_article_age_hours = 24
-    
-    async def run(self):
-        """Main execution loop with self-correction."""
-        self.logger.info("🤖 AGENT ACTIVATED (HARDENED MODE)")
-        
-        browser_started = False
-        
-        try:
-            # ================================================================
-            # PHASE 0: BROWSER INITIALIZATION
-            # ================================================================
-            await self.publisher.start()
-            browser_started = True
-            
-            # ================================================================
-            # PHASE 1: LOGIN (with retry)
-            # ================================================================
-            if not await self._safe_login():
-                self.logger.critical("❌ Login failed after all retries. Aborting.")
-                return
-            
-            published_count = 0
+        self.max_login_retries = 2
+        self.max_consecutive_publish_failures = 10
 
-            # ================================================================
-            # PHASE 2 & 3: LOOP – process every candidate; refetch after each publish
-            # ================================================================
-            while published_count < self.max_articles:
-                links = await self._get_article_links_with_fallback(limit=15)
-                self.logger.info(f"🔎 Found {len(links)} candidate articles (from {self._get_source_name()})")
+    def _normalize_publish_plan(self, raw_plan: List[Dict[str, Any]]) -> List[Dict[str, int | str]]:
+        normalized: List[Dict[str, int | str]] = []
+        seen = set()
 
-                if not links:
-                    self.logger.info("🛑 No candidates. Stopping.")
-                    break
-
-                processed_one = False
-                skipped_all_published = True  # true if we only skipped (already published)
-                # Memory: skip only is_success(url). Never use is_processed – failed URLs must be retried. Prevents duplicate posts.
-                for url in links:
-                    if published_count >= self.max_articles:
-                        break
-
-                    if self.memory.is_success(url):
-                        self.logger.debug(f"⏭️ Skipping already published: {url[:50]}...")
-                        continue
-
-                    skipped_all_published = False
-                    self.logger.info(f"▶️ Processing: {url}")
-
-                    # Full pipeline: scrape → summarize → telugu → image → Create Article → fill → publish
-                    success = await self._process_article(url)
-                    if success:
-                        self.memory.mark_success(url)
-                        published_count += 1
-                        processed_one = True
-                        self.logger.info(f"✅ Published ({published_count}/{self.max_articles}) – refetching and continuing")
-                        break
-                    else:
-                        self.logger.warning("⚠️ Article skipped/failed")
-
-                if published_count >= self.max_articles:
-                    self.logger.info("🛑 Max articles reached. Stopping.")
-                    break
-                if not processed_one:
-                    # All candidates were already published or failed – try next source once for new articles
-                    if links and skipped_all_published:
-                        self.scraper_index = (self.scraper_index + 1) % len(self.scrapers)
-                        self.logger.info(f"   All from {self.scrapers[(self.scraper_index - 1) % len(self.scrapers)][0]} already published – trying {self._get_source_name()}")
-                        continue
-                    self.logger.info("🛑 No more candidates to process. Stopping.")
-                    break
-                    
-        except Exception as e:
-            self.logger.critical(f"🔥 FATAL ERROR: {e}", exc_info=True)
-            
-        finally:
-            # Shutdown
-            if browser_started:
-                await self.publisher.stop()
-            for _name, scraper in self.scrapers:
-                try:
-                    scraper.close()
-                except Exception:
-                    pass
-            self.logger.info("😴 AGENT SLEEPING")
-    
-    # =========================================================================
-    # LOGIN (with classified retry)
-    # =========================================================================
-    
-    async def _safe_login(self) -> bool:
-        """Login with retry. Returns True if successful."""
-        for attempt in range(self.max_login_retries):
+        for row in raw_plan:
+            category = str(row.get("category", "")).strip().lower()
+            if not category or category in seen:
+                continue
             try:
-                if await self.publisher.login():
-                    return True
-                self.logger.warning(f"Login attempt {attempt + 1} failed, retrying...")
-                await asyncio.sleep(2)
-            except Exception as e:
-                self.logger.error(f"Login error: {e}")
-                # Classify as LOGIN_FAILURE, recovery = RETRY_ACTION
-                await asyncio.sleep(2)
-        
-        return False
-    
-    def _get_scraper(self):
-        """Current news source scraper."""
-        return self.scrapers[self.scraper_index][1]
-    
-    def _get_source_name(self) -> str:
-        """Current source name for logging."""
-        return self.scrapers[self.scraper_index][0]
+                total = int(row.get("total", 5))
+            except Exception:
+                total = 5
+            try:
+                breaking_target = int(row.get("breaking_target", 3))
+            except Exception:
+                breaking_target = 3
+
+            if total <= 0:
+                continue
+            breaking_target = max(0, min(breaking_target, total))
+            normalized.append({"category": category, "total": total, "breaking_target": breaking_target})
+            seen.add(category)
+
+        return normalized
+
+    async def run(self) -> None:
+        await self.publisher.start()
+        try:
+            if not await self._safe_login():
+                self.logger.critical("Login failed after retries")
+                return
+
+            if self.settings.scheduler_enabled:
+                while True:
+                    await self._run_once()
+                    await asyncio.sleep(self.settings.scheduler_interval_minutes * 60)
+            else:
+                await self._run_once()
+        finally:
+            await self.publisher.stop()
+
+    async def _run_once(self) -> None:
+        metrics = PipelineMetrics()
+
+        by_category = self.ingestion.run()
+        metrics.record_category_counts(by_category)
+        for cat, count in metrics.total_scraped_per_category.items():
+            self.logger.info(f"metric.scraped category={cat} count={count}")
+
+        all_articles = [item for rows in by_category.values() for item in rows]
+        clusters = self.resolver.cluster(all_articles)
+        metrics.clusters_formed = len(clusters)
+        self.logger.info(f"metric.clusters_formed count={metrics.clusters_formed}")
+
+        cluster_rows: List[Tuple[object, object]] = []
+        for cluster in clusters:
+            decision = self.breaking.classify(cluster)
+            if decision.is_breaking:
+                metrics.breaking_news_count += 1
+            cluster_rows.append((cluster, decision))
+
+        self.logger.info(f"metric.breaking_news_count count={metrics.breaking_news_count}")
+
+        clusters_by_category: Dict[str, List[Tuple[object, object]]] = {}
+        for cluster, decision in cluster_rows:
+            category = str(getattr(cluster, "dominant_category", "")).strip().lower()
+            if not category:
+                continue
+            clusters_by_category.setdefault(category, []).append((cluster, decision))
+
+        published = 0
+        consecutive_publish_failures = 0
+        stop_run = False
+
+        for step in self.publish_plan:
+            category = str(step["category"])
+            total_target = int(step["total"])
+            breaking_target = int(step["breaking_target"])
+
+            category_rows = clusters_by_category.get(category, [])
+            if not category_rows:
+                self.logger.info(
+                    f"category.result category={category} published=0 breaking_published=0 target_total={total_target} target_breaking={breaking_target} reason=no_candidates"
+                )
+                continue
+
+            breaking_pool = [row for row in category_rows if bool(getattr(row[1], "is_breaking", False))]
+            normal_pool = [row for row in category_rows if not bool(getattr(row[1], "is_breaking", False))]
+
+            breaking_pool.sort(
+                key=lambda row: (
+                    float(getattr(row[1], "confidence", 0.0)),
+                    getattr(row[0], "end_time", datetime.min.replace(tzinfo=timezone.utc)),
+                ),
+                reverse=True,
+            )
+            normal_pool.sort(
+                key=lambda row: getattr(row[0], "end_time", datetime.min.replace(tzinfo=timezone.utc)),
+                reverse=True,
+            )
+            # Prefer sources with better image hit-rate before BBC-heavy picks.
+            breaking_pool.sort(key=lambda row: self._cluster_source_rank(row[0]))
+            normal_pool.sort(key=lambda row: self._cluster_source_rank(row[0]))
+
+            cat_published = 0
+            cat_breaking_published = 0
+
+            self.logger.info(
+                f"category.plan category={category} target_total={total_target} target_breaking={breaking_target} candidates={len(category_rows)}"
+            )
+            attempted_urls: set[str] = set()
+            source_failures: Dict[str, int] = {}
+
+            while cat_published < total_target:
+                selected: Optional[Tuple[object, object]] = None
+                forced_breaking = False
+
+                if cat_breaking_published < breaking_target and breaking_pool:
+                    selected = self._pop_with_source_backoff(breaking_pool, source_failures)
+                elif cat_breaking_published < breaking_target and normal_pool:
+                    selected = self._pop_with_source_backoff(normal_pool, source_failures)
+                    forced_breaking = True
+                elif normal_pool:
+                    selected = self._pop_with_source_backoff(normal_pool, source_failures)
+                elif breaking_pool:
+                    selected = self._pop_with_source_backoff(breaking_pool, source_failures)
+
+                if selected is None:
+                    break
+                cluster, decision = selected
+                cluster_source = self._cluster_primary_source(cluster)
+                cluster_articles = list(getattr(cluster, "articles", []) or [])
+                cluster_articles.sort(key=lambda a: len(getattr(a, "body", "") or ""), reverse=True)
+                if not cluster_articles:
+                    article = self._pick_representative(getattr(cluster, "articles", []))
+                    if article:
+                        cluster_articles = [article]
+                if not cluster_articles:
+                    continue
+
+                selected_is_breaking = forced_breaking or bool(getattr(decision, "is_breaking", False))
+                if forced_breaking:
+                    self.logger.info(f"breaking.fallback_promote url={cluster_articles[0].url} category={category}")
+
+                published_from_cluster = False
+                for article in cluster_articles:
+                    article_url = str(getattr(article, "url", "")).strip()
+                    if not article_url or article_url in attempted_urls:
+                        continue
+                    attempted_urls.add(article_url)
+
+                    if self.memory.is_success(article_url):
+                        continue
+                    if self.settings.scheduler_enabled and self.memory.is_recent_failure(article_url, within_minutes=self.settings.recent_failure_skip_minutes):
+                        self.logger.info(f"skip.recent_failure url={article_url}")
+                        continue
+
+                    if self._is_article_too_old(getattr(article, "published_time", None)):
+                        self.memory.mark_failed(article_url, "article_too_old")
+                        continue
+
+                    ok, fail_reason = await self._publish_article(article, selected_is_breaking, metrics)
+                    if ok:
+                        cat_published += 1
+                        published += 1
+                        if selected_is_breaking:
+                            cat_breaking_published += 1
+                        consecutive_publish_failures = 0
+                        self.memory.mark_success(article_url)
+                        published_from_cluster = True
+                        break
+
+                    if fail_reason == "workflow_failed":
+                        consecutive_publish_failures += 1
+                        self.memory.mark_failed(article_url, "publish_failed")
+                    else:
+                        self.logger.info(f"skip.transient_failure url={article_url} reason={fail_reason}")
+
+                    if cluster_source and fail_reason in {"image_missing", "workflow_failed"}:
+                        source_failures[cluster_source] = source_failures.get(cluster_source, 0) + 1
+
+                    if consecutive_publish_failures >= self.max_consecutive_publish_failures:
+                        self.logger.error(
+                            f"Stopping run after {consecutive_publish_failures} consecutive publish failures to avoid a retry loop"
+                        )
+                        stop_run = True
+                        break
+
+                if stop_run:
+                    break
+                if not published_from_cluster:
+                    continue
+            self.logger.info(
+                f"category.result category={category} published={cat_published} breaking_published={cat_breaking_published} "
+                f"target_total={total_target} target_breaking={breaking_target}"
+            )
+
+            if stop_run:
+                break
+
+        self.logger.info(
+            f"metric.image_quality pass={metrics.image_pass_count} fail={metrics.image_fail_count} reasons={dict(metrics.image_fail_reasons)}"
+        )
+        self.logger.info(f"run_complete published={published} total_candidates={len(cluster_rows)}")
+
+    def _pick_representative(self, articles: List[object]):
+        return max(articles, key=lambda a: len(getattr(a, "body", "") or ""), default=None)
+
+    def _cluster_primary_source(self, cluster: object) -> str:
+        articles = list(getattr(cluster, "articles", []) or [])
+        if not articles:
+            return ""
+        return str(getattr(articles[0], "source", "") or "").strip().lower()
+
+    def _pop_with_source_backoff(
+        self,
+        pool: List[Tuple[object, object]],
+        source_failures: Dict[str, int],
+    ) -> Optional[Tuple[object, object]]:
+        if not pool:
+            return None
+
+        best_idx = 0
+        best_key: Optional[Tuple[int, int]] = None
+        for idx, row in enumerate(pool):
+            source = self._cluster_primary_source(row[0])
+            penalty = source_failures.get(source, 0)
+            key = (penalty, idx)
+            if best_key is None or key < best_key:
+                best_key = key
+                best_idx = idx
+
+        return pool.pop(best_idx)
+    def _cluster_source_rank(self, cluster: object) -> int:
+        articles = list(getattr(cluster, "articles", []) or [])
+        if not articles:
+            return 3
+        source = str(getattr(articles[0], "source", "")).lower()
+        if any(tag in source for tag in ("toi", "times of india", "india today")):
+            return 0
+        if "aljazeera" in source:
+            return 1
+        if "bbc" in source:
+            return 2
+        if "ndtv" in source:
+            return 5
+        return 4
 
     def _is_article_too_old(self, published_time_str: Optional[str]) -> bool:
-        """True if article is older than max_article_age_hours (skip for real-time)."""
-        if not published_time_str or not published_time_str.strip():
-            return False  # no date = allow (don't drop)
+        if not published_time_str:
+            return False
         try:
-            s = published_time_str.strip().replace("Z", "+00:00")
-            dt = datetime.fromisoformat(s)
+            dt = datetime.fromisoformat(published_time_str.replace("Z", "+00:00"))
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
-            else:
-                dt = dt.astimezone(timezone.utc)
-            age = datetime.now(timezone.utc) - dt
-            return age > timedelta(hours=self.max_article_age_hours)
+            age = datetime.now(timezone.utc) - dt.astimezone(timezone.utc)
+            return age > timedelta(hours=self.settings.max_article_age_hours)
         except Exception:
-            return False  # unparseable = allow
-
-    async def _get_article_links_with_fallback(self, limit: int = 15):
-        """
-        Get article links from current source (newest first).
-        If no links: wait 1 min and retry, up to 5 times (5 mins).
-        If still no links: switch to next source and try once.
-        Returns list of URLs (may be empty).
-        """
-        for wait_round in range(self._no_articles_max_waits):
-            links = self._get_scraper().get_article_links(limit=limit)
-            if links:
-                return links
-            name = self._get_source_name()
-            if wait_round < self._no_articles_max_waits - 1:
-                self.logger.info(f"   No new articles from {name}; waiting {self._no_articles_wait_sec}s before retry ({wait_round + 1}/{self._no_articles_max_waits})...")
-                await asyncio.sleep(self._no_articles_wait_sec)
-        
-        # 5 mins with no articles – switch to next source
-        prev_name = self._get_source_name()
-        self.scraper_index = (self.scraper_index + 1) % len(self.scrapers)
-        next_name = self._get_source_name()
-        self.logger.info(f"   No new articles from {prev_name} in 5 mins – switching to {next_name}")
-        links = self._get_scraper().get_article_links(limit=limit)
-        return links
-    
-    # =========================================================================
-    # ARTICLE PROCESSING PIPELINE
-    # =========================================================================
-    
-    async def _process_article(self, url: str) -> bool:
-        """
-        Process single article through the pipeline.
-        
-        Returns: True if published, False if failed/skipped.
-        """
-        # ================================================================
-        # AGENT A: INTELLIGENCE (No browser access)
-        # ================================================================
-        
-        # Step 1: Scrape (current source)
-        article = self._get_scraper().scrape_article(url)
-        if not article:
-            self.memory.mark_failed(url, "Scrape failed")
             return False
 
-        # Real-time filter: skip articles older than max_article_age_hours
-        if self._is_article_too_old(article.published_time):
-            self.logger.warning(f"⏭️ Skipping old article (published: {article.published_time})")
-            self.memory.mark_failed(url, "Article too old")
-            return False
-        
-        # Step 2: Summarize (English)
+    def _decide_cms_category(self, article, title: str, body: str) -> str:
+        hint = str(getattr(article, "category", "")).lower().strip()
+        fallback = PIPELINE_TO_CMS_CATEGORY.get(hint, "National")
+        source_low = str(getattr(article, "source", "")).lower()
+        url_low = str(getattr(article, "url", "")).lower()
+        text = f" {title} {body} ".lower()
+
+        source_is_india = any(token in source_low for token in ("toi", "times of india", "the hindu"))
+        url_has_india_news = ("/india/" in url_low) or ("/news/national/" in url_low)
+        india_context = source_is_india or url_has_india_news or any(
+            marker in text
+            for marker in (
+                " india ", " indian ", "new delhi", "delhi", "mumbai", "bengaluru", "kolkata", "chennai",
+                "hyderabad", "rajya sabha", "lok sabha", "andhra pradesh", "telangana",
+            )
+        )
+
+        env_signal = any(
+            kw in text
+            for kw in (
+                "environment", "climate", "wildlife", "ecology", "ecological", "conservation", "biodiversity",
+                "habitat", "restoration", "forest", "nature", "species",
+            )
+        )
+        tech_signal = any(
+            kw in text
+            for kw in (
+                "technology", " tech ", "artificial intelligence", " ai ", "software", "algorithm", "chip",
+                "semiconductor", "digital", "cyber", "creative rights", "copyright",
+            )
+        )
+
+        decided = self.category_decider.decide(
+            title=title,
+            body=body,
+            source=getattr(article, "source", ""),
+            pipeline_hint=hint,
+        )
+        if not decided:
+            decided = fallback
+
+        if hint == "environment" and env_signal:
+            return "Environment"
+        if hint == "tech" and tech_signal:
+            return "Technology"
+
+        # Keep international pipeline items in International unless they came from India-specific sources/urls.
+        if hint == "international" and not india_context:
+            return "International"
+
+        if india_context:
+            if decided in {"International", "State"}:
+                return "National"
+            return decided
+
+        # For non-India context, avoid National/State leakage.
+        if decided in {"National", "State", "Telangana", "Andhra Pradesh"}:
+            if env_signal:
+                return "Environment"
+            if tech_signal:
+                return "Technology"
+            return "International"
+
+        if env_signal and decided in {"International", "Lifestyle"}:
+            return "Environment"
+        if tech_signal and decided in {"Politics", "International", "National"}:
+            return "Technology"
+
+        return decided
+    def _build_hashtags(self, category: str, title: str, is_breaking: bool) -> str:
+        tags = ["#breaking", "#news"] if is_breaking else ["#news", "#trending"]
+
+        cat_tag = re.sub(r"\s+", "", category.strip().lower())
+        if cat_tag:
+            tags.append(f"#{cat_tag}")
+
+        words = re.findall(r"[a-zA-Z]{4,}", title.lower())
+        keywords = []
+        for word in words:
+            if word in STOPWORDS:
+                continue
+            if word not in keywords:
+                keywords.append(word)
+            if len(keywords) >= 2:
+                break
+
+        for kw in keywords:
+            tags.append(f"#{kw}")
+
+        deduped = []
+        seen = set()
+        for tag in tags:
+            if tag in seen:
+                continue
+            seen.add(tag)
+            deduped.append(tag)
+
+        hashtag = " ".join(deduped)
+        return hashtag[:120]
+
+    def _build_image_query(self, article, summary_title: str, category: str) -> str:
+        source = str(getattr(article, "source", "")).strip()
+        title = (summary_title or getattr(article, "title", "") or "").strip()
+        if source and title:
+            return f"{title} {source} news photo"
+        if title:
+            return f"{title} news photo"
+        return f"{category} breaking news photo"
+
+    def _select_fallback_image_url(self, article) -> Optional[str]:
+        source_low = str(getattr(article, "source", "") or "").lower()
+        if any(token in source_low for token in ("bbc", "ndtv", "india today")):
+            # These sources often expose branded, blocked, or low-quality CDN assets in fallback mode.
+            return None
+
+        for raw in [getattr(article, "main_image", ""), getattr(article, "og_image", "")]:
+            url = str(raw or "").strip()
+            if not url:
+                continue
+            low = url.lower()
+            if not low.startswith("http"):
+                continue
+            if low.startswith("data:image") or low.endswith(".svg"):
+                continue
+
+            # Never bypass branded/overlay URLs via fallback.
+            if "ichef.bbci.co.uk/news/" in low and "/branded_news/" in low:
+                continue
+            if "static.files.bbci.co.uk" in low:
+                continue
+
+            try:
+                if self.image_pipeline._is_blocked_image_url(url):
+                    continue
+            except Exception:
+                pass
+
+            return url
+        return None
+    async def _publish_article(self, article, is_breaking: bool, metrics: PipelineMetrics) -> Tuple[bool, str]:
         summary = self.summarizer.summarize(article.title, article.body)
         if not summary:
-            self.memory.mark_failed(url, "Summarization failed")
-            return False
-        
-        # Step 3: Telugu Generation
+            return False, "summary_failed"
+
         telugu = self.telugu_writer.write(summary["title"], summary["body"])
         if not telugu:
-            self.memory.mark_failed(url, "Telugu generation failed")
-            return False
-        
-        # Step 4: Category and hashtags (always National per CMS)
-        category = "National"
-        hashtag = "#national #news #trending"
-        
-        # Step 5: Image Strategy (Smart Selection)
-        image_path = None
-        image_query = ""
+            return False, "telugu_failed"
 
-        if get_image_mode() == "browser":
-            # IMAGE_MODE=browser: always use second-tab Google Images search (no OG, no CMS nav)
-            self.logger.info("   [IMAGE_MODE=browser] Will use browser image search (second tab)")
-            image_query = f"{article.title} news"
-        else:
-            # IMAGE_MODE=api (default): OG download and/or search query for fill_form
-            use_search_strategy = any(s in article.source.lower() for s in ["guardian", "reuters", "aljazeera"])
-            if use_search_strategy:
-                self.logger.info(f"   Using Search Strategy for {article.source} (Avoid Watermarks)")
-                image_query = f"{article.title} news"
+        image_result = self.image_pipeline.select_best(
+            article_url=article.url,
+            title=article.title,
+            fallback_urls=[article.main_image, article.og_image],
+            article_context=(article.body or "")[:1200],
+        )
+
+        metrics.record_image_result(image_result.passed, image_result.rejection_reasons[0] if image_result.rejection_reasons else "")
+
+        if not image_result.passed and not image_result.needs_image:
+            self.logger.warning(
+                f"Skipping publish due to missing valid image. url={article.url} reasons={image_result.rejection_reasons}"
+            )
+            return False, "image_missing"
+
+        if not image_result.local_path and not image_result.selected_url:
+            fallback_url = self._select_fallback_image_url(article)
+            if fallback_url:
+                image_result.selected_url = fallback_url
+                self.logger.warning(
+                    f"Image quality pipeline returned no file; using source image URL fallback. url={article.url}"
+                )
             else:
-                # Prefer main article image (usually larger) then og:image
-                main_image = getattr(article, "main_image", None)
-                if main_image:
-                    self.logger.info("   Trying main article image (higher res)...")
-                    image_path = self.image_downloader.download(main_image, article.title)
-                if not image_path and article.og_image:
-                    self.logger.info("   Trying OG image...")
-                    image_path = self.image_downloader.download(article.og_image, article.title)
-                if not image_path:
-                    self.logger.info("   Image missing/failed, falling back to Search")
-                    image_query = f"{article.title} news"
+                self.logger.warning(
+                    f"Skipping publish because no usable image path/url is available. url={article.url}"
+                )
+                return False, "image_missing"
 
-                if image_path:
-                    try:
-                        with open(image_path, "rb") as f:
-                            data = f.read()
-                        if not meets_minimum_resolution(data):
-                            self.logger.warning("   Downloaded image below min resolution, using browser search")
-                            image_path = None
-                            image_query = f"{article.title} news"
-                    except Exception:
-                        pass
+        category = self._decide_cms_category(article, summary["title"], summary["body"])
+        hashtag = self._build_hashtags(category=category, title=summary["title"], is_breaking=is_breaking)
+        image_search_query = self._build_image_query(article, summary["title"], category)
+        self.logger.info(f"publish.meta category={category} hashtag={hashtag}")
 
-        if not image_path and not image_query:
-            self.memory.mark_failed(url, "No image strategy valid")
-            return False
-        
-        # ================================================================
-        # VALIDATION GATE
-        # ================================================================
         validation = self.validator.validate(
             english_title=summary["title"],
             english_body=summary["body"],
             telugu_title=telugu["title"],
             telugu_body=telugu["body"],
             category=category,
-            image_path=image_path,
+            image_path=image_result.local_path,
             hashtag=hashtag,
-            image_search_query=image_query
+            image_search_query=image_search_query,
+            allow_missing_image=True,
         )
-        
         if not validation.is_valid:
-            self.logger.error(f"❌ VALIDATION FAILED: {validation.error_message}")
-            self.memory.mark_failed(url, validation.error_message)
-            # Recovery: DISCARD_ARTICLE (no browser touched)
-            return False
-        
-        # ================================================================
-        # AGENT B: BROWSER EXECUTION (No intelligence)
-        # ================================================================
-        
-        # Build validated ArticleData
+            self.logger.warning(f"Validation failed for article: {validation.error_message}")
+            return False, "validation_failed"
+
         data = ArticleData(
             english_title=summary["title"],
             english_body=summary["body"],
@@ -351,103 +534,86 @@ class HardenedOrchestrator:
             telugu_body=telugu["body"],
             category=category,
             hashtag=hashtag,
-            image_path=image_path,
-            image_search_query=image_query
+            image_path=image_result.local_path,
+            image_search_query=image_search_query,
+            needs_image=image_result.needs_image,
+            image_url=image_result.selected_url,
+            image_metadata={
+                "quality": image_result.metadata,
+                "rejection_reasons": image_result.rejection_reasons,
+            },
         )
-        
-        # Execute browser workflow with recovery
-        return await self._execute_browser_workflow(data, url)
-    
-    # =========================================================================
-    # BROWSER WORKFLOW (Deterministic with Recovery)
-    # =========================================================================
-    
+
+        workflow_ok = await self._execute_browser_workflow(data, article.url)
+        if workflow_ok:
+            return True, ""
+        return False, "workflow_failed"
+    async def _safe_login(self) -> bool:
+        for attempt in range(self.max_login_retries):
+            try:
+                if await self.publisher.login():
+                    return True
+                self.logger.warning(f"Login attempt {attempt + 1} failed")
+            except Exception as exc:
+                self.logger.error(f"Login error: {exc}")
+            await asyncio.sleep(2)
+        return False
+
     async def _execute_browser_workflow(self, data: ArticleData, url: str) -> bool:
-        """
-        Simple linear flow (no hallucination):
-        1. Image: open new tab → search image → download → save to memory → close tab.
-        2. Open article page: click Content → Articles → Create Article.
-        3. Paste title (Telugu + English), description (Telugu + English).
-        4. Select category (other country, not India = International).
-        5. Paste hashtags.
-        6. Click Choose File → upload downloaded image → click Crop.
-        7. Scroll down a little → click Publish.
-        Then repeat: if Create Article visible, click it; scrape new article; search new image; fill; publish.
-        """
-        # ================================================================
-        # STEP 0: BROWSER IMAGE (IMAGE_MODE=browser only)
-        # CMS page remains untouched. Open second tab → search → download → close tab.
-        # If download fails → discard article.
-        # ================================================================
-        if get_image_mode() == "browser" and data.image_search_query and not data.image_path:
-            self.logger.info("   [IMAGE_MODE=browser] Opening second tab for Google Images...")
-            ctx = self.publisher.context
-            if ctx:
-                path = await find_and_download_in_new_tab(ctx, data.image_search_query)
-            else:
-                path = None
-            if path:
-                data.image_path = path
-                data.image_search_query = ""
-                self.logger.info(f"   [IMAGE_MODE=browser] Image saved, image tab closed. Path: {path}")
-            else:
-                self.logger.warning("   Image download failed → continuing without image (will try publish anyway)")
-                data.image_search_query = ""
-
-        # ================================================================
-        # STEP 1: NAVIGATE (do not navigate CMS during image search)
-        # ================================================================
         if not await self.publisher.create_article():
-            # Recovery: RELOAD_PAGE
-            self.logger.warning("Navigation failed, reloading page...")
             if self.publisher.page:
                 await self.publisher.page.reload()
             await asyncio.sleep(2)
-            
             if not await self.publisher.create_article():
-                self.memory.mark_failed(url, "Navigation failed after reload")
                 return False
-        
-        # ================================================================
-        # STEP 2: FILL FORM (Atomic - NO retry on same page)
-        # ================================================================
-        fill_success = await self.publisher.fill_form(data)
-        
-        if not fill_success:
-            # CRITICAL: State is DIRTY - MUST reload
-            self.logger.error("❌ REACT_STATE_CORRUPTION: fill_form failed")
+
+        if not await self.publisher.fill_form(data):
             if self.publisher.page:
                 await self.publisher.page.reload()
             await asyncio.sleep(2)
-            # DO NOT retry fill_form - abort this article
-            self.memory.mark_failed(url, "Form fill failed (state corruption)")
             return False
-        
-        # ================================================================
-        # STEP 3: PUBLISH (with retry)
-        # ================================================================
-        for attempt in range(self.max_publish_retries):
+
+        for _attempt in range(self.max_publish_retries):
             if await self.publisher.publish():
-                break
-            
-            self.logger.warning(f"Publish attempt {attempt + 1} failed, retrying...")
+                return True
             await asyncio.sleep(2)
-        else:
-            # All retries failed
-            self.memory.mark_failed(url, "Publish failed after retries")
-            return False
-        
-        # ================================================================
-        # STEP 4: VERIFY SUCCESS
-        # ================================================================
-        if await self.publisher.verify_publish():
-            return True
-        
-        # Verification failed but publish might have succeeded
-        # Log warning but consider it a success
-        self.logger.warning("⚠️ Verify uncertain, assuming success")
-        return True
+        return False
 
 
-# Backward compatibility alias
 Orchestrator = HardenedOrchestrator
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

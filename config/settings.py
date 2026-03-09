@@ -1,5 +1,8 @@
+﻿import json
 import os
 from dataclasses import dataclass
+from typing import Any, Dict, List
+
 from dotenv import load_dotenv
 
 
@@ -13,11 +16,159 @@ def _get_bool(value: str | None, default: bool) -> bool:
 
 
 def _get_image_mode(value: str | None) -> str:
-    """IMAGE_MODE: 'api' (default) or 'browser'. Invalid values fall back to 'api'."""
     if not value:
         return "api"
     v = value.strip().lower()
     return "browser" if v == "browser" else "api"
+
+
+def _parse_json_env(name: str, default: Any) -> Any:
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    try:
+        return json.loads(raw)
+    except Exception:
+        return default
+
+
+DEFAULT_CATEGORY_SOURCES: Dict[str, List[Dict[str, str]]] = {
+    "business": [
+        {"name": "TOI", "scraper": "toi", "url": "https://timesofindia.indiatimes.com/business"},
+        {"name": "India Today", "scraper": "indiatoday", "url": "https://www.indiatoday.in/business"},
+        {"name": "BBC", "scraper": "bbc", "url": "https://www.bbc.com/news/business"},
+    ],
+    "tech": [
+        {"name": "TOI", "scraper": "toi", "url": "https://timesofindia.indiatimes.com/technology"},
+        {"name": "India Today", "scraper": "indiatoday", "url": "https://www.indiatoday.in/technology"},
+        {"name": "BBC", "scraper": "bbc", "url": "https://www.bbc.com/news/technology"},
+    ],
+    "international": [
+        {"name": "TOI", "scraper": "toi", "url": "https://timesofindia.indiatimes.com/world"},
+        {"name": "India Today", "scraper": "indiatoday", "url": "https://www.indiatoday.in/world"},
+        {"name": "BBC", "scraper": "bbc", "url": "https://www.bbc.com/news"},
+        {"name": "AlJazeera", "scraper": "aljazeera", "url": "https://www.aljazeera.com/news"},
+        {"name": "NDTV", "scraper": "ndtv", "url": "https://www.ndtv.com/world-news"},
+    ],
+    "national": [
+        {"name": "TOI", "scraper": "toi", "url": "https://timesofindia.indiatimes.com/india"},
+        {"name": "NDTV", "scraper": "ndtv", "url": "https://www.ndtv.com/india"},
+        {"name": "India Today", "scraper": "indiatoday", "url": "https://www.indiatoday.in/india"},
+    ],
+    "environment": [
+        {"name": "India Today", "scraper": "indiatoday", "url": "https://www.indiatoday.in/environment"},
+        {"name": "TOI", "scraper": "toi", "url": "https://timesofindia.indiatimes.com/india"},
+        {"name": "AlJazeera", "scraper": "aljazeera", "url": "https://www.aljazeera.com/climate-crisis"},
+    ],
+    "crime": [
+        {"name": "TOI", "scraper": "toi", "url": "https://timesofindia.indiatimes.com/india"},
+        {"name": "NDTV", "scraper": "ndtv", "url": "https://www.ndtv.com/india"},
+        {"name": "India Today", "scraper": "indiatoday", "url": "https://www.indiatoday.in/india"},
+    ],
+    "sports": [
+        {"name": "TOI", "scraper": "toi", "url": "https://timesofindia.indiatimes.com/sports"},
+        {"name": "NDTV", "scraper": "ndtv", "url": "https://sports.ndtv.com/"},
+        {"name": "India Today", "scraper": "indiatoday", "url": "https://www.indiatoday.in/sports"},
+        {"name": "AlJazeera", "scraper": "aljazeera", "url": "https://www.aljazeera.com/sports/"},
+    ],
+}
+
+
+def _parse_category_sources(name: str = "CATEGORY_SOURCES") -> Dict[str, List[Dict[str, str]]]:
+    raw = _parse_json_env(name, DEFAULT_CATEGORY_SOURCES)
+    if not isinstance(raw, dict):
+        return DEFAULT_CATEGORY_SOURCES
+
+    normalized: Dict[str, List[Dict[str, str]]] = {}
+    for category, default_rows in DEFAULT_CATEGORY_SOURCES.items():
+        rows = raw.get(category, default_rows)
+        if not isinstance(rows, list) or not rows:
+            normalized[category] = default_rows
+            continue
+
+        valid_rows: List[Dict[str, str]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            name_val = str(row.get("name", "")).strip()
+            scraper_val = str(row.get("scraper", "")).strip().lower()
+            url_val = str(row.get("url", "")).strip()
+            if not (name_val and scraper_val and url_val):
+                continue
+            valid_rows.append({"name": name_val, "scraper": scraper_val, "url": url_val})
+
+        normalized[category] = valid_rows or default_rows
+
+    return normalized
+
+
+DEFAULT_SOURCE_CREDIBILITY = {
+    "BBC": 0.9,
+    "AlJazeera": 0.82,
+    "TOI": 0.78,
+    "NDTV": 0.72,
+    "India Today": 0.79,
+    "Reuters": 0.95,
+}
+
+DEFAULT_IMAGE_THRESHOLDS = {
+    "min_width": 420,
+    "min_height": 236,
+    "min_file_size_bytes": 30000,
+    "min_aspect_ratio": 0.4,
+    "max_aspect_ratio": 2.8,
+    "min_sharpness": 18.0,
+    "min_relevance": 0.12,
+    "vision_weight": 0.25,
+    "min_vision_quality": 0.58,
+    "min_vision_relevance": 0.4,
+    "vision_max_candidates": 6,
+}
+
+DEFAULT_CATEGORY_PUBLISH_PLAN: List[Dict[str, Any]] = [
+    {"category": "international", "total": 5, "breaking_target": 3},
+    {"category": "national", "total": 5, "breaking_target": 3},
+    {"category": "business", "total": 5, "breaking_target": 3},
+    {"category": "sports", "total": 5, "breaking_target": 3},
+    {"category": "tech", "total": 5, "breaking_target": 3},
+    {"category": "environment", "total": 5, "breaking_target": 3},
+    {"category": "crime", "total": 5, "breaking_target": 3},
+]
+
+
+def _parse_publish_plan(name: str = "CATEGORY_PUBLISH_PLAN") -> List[Dict[str, Any]]:
+    raw_plan = _parse_json_env(name, DEFAULT_CATEGORY_PUBLISH_PLAN)
+    if not isinstance(raw_plan, list):
+        return DEFAULT_CATEGORY_PUBLISH_PLAN
+
+    normalized: List[Dict[str, Any]] = []
+    seen = set()
+
+    for row in raw_plan:
+        if not isinstance(row, dict):
+            continue
+        category = str(row.get("category", "")).strip().lower()
+        if not category or category in seen:
+            continue
+
+        try:
+            total = int(row.get("total", 5))
+        except Exception:
+            total = 5
+
+        try:
+            breaking = int(row.get("breaking_target", 3))
+        except Exception:
+            breaking = 3
+
+        if total <= 0:
+            continue
+        breaking = max(0, min(breaking, total))
+
+        normalized.append({"category": category, "total": total, "breaking_target": breaking})
+        seen.add(category)
+
+    return normalized or DEFAULT_CATEGORY_PUBLISH_PLAN
 
 
 @dataclass(frozen=True)
@@ -25,21 +176,39 @@ class Settings:
     cms_url: str
     cms_email: str
     cms_password: str
-    cms_role: str  # Login role like "State Sub Editor"
+    cms_role: str
     source_url: str
     gemini_api_key: str | None
     openai_api_key: str | None
     ai_provider: str
     headless: bool
-    slow_mo: int  # Milliseconds to wait between browser actions (for visibility)
+    slow_mo: int
     user_data_dir: str
     screenshots_dir: str
     downloads_dir: str
-    image_mode: str  # "api" | "browser" — default "api"
-    headline_max: int = 80
-    summary_max: int = 400
-    navigation_timeout_ms: int = 30000
-    selector_timeout_ms: int = 10000
+    image_mode: str
+
+    max_articles: int
+    max_links_per_source: int
+    max_article_age_hours: int
+
+    scheduler_enabled: bool
+    scheduler_interval_minutes: int
+    recent_failure_skip_minutes: int
+
+    category_sources: Dict[str, List[Dict[str, str]]]
+    category_publish_plan: List[Dict[str, Any]]
+
+    breaking_min_sources: int
+    breaking_window_minutes: int
+    breaking_confidence_threshold: float
+    source_credibility: Dict[str, float]
+
+    resolver_title_similarity: float
+    resolver_content_similarity: float
+    resolver_time_window_minutes: int
+
+    image_quality_thresholds: Dict[str, float]
 
 
 def get_settings() -> Settings:
@@ -53,9 +222,32 @@ def get_settings() -> Settings:
         openai_api_key=os.getenv("OPENAI_API_KEY"),
         ai_provider=os.getenv("AI_PROVIDER", "gemini").strip().lower(),
         headless=_get_bool(os.getenv("HEADLESS"), False),
-        slow_mo=int(os.getenv("SLOW_MO", "0")),  # Milliseconds between actions
+        slow_mo=int(os.getenv("SLOW_MO", "0")),
         user_data_dir=os.getenv("USER_DATA_DIR", ".playwright").strip(),
         screenshots_dir=os.getenv("SCREENSHOTS_DIR", "artifacts/screenshots").strip(),
         downloads_dir=os.getenv("DOWNLOADS_DIR", "artifacts/downloads").strip(),
         image_mode=_get_image_mode(os.getenv("IMAGE_MODE")),
+
+        max_articles=int(os.getenv("MAX_ARTICLES", "5")),
+        max_links_per_source=int(os.getenv("MAX_LINKS_PER_SOURCE", "8")),
+        max_article_age_hours=int(os.getenv("MAX_ARTICLE_AGE_HOURS", "24")),
+
+        scheduler_enabled=_get_bool(os.getenv("SCHEDULER_ENABLED"), False),
+        scheduler_interval_minutes=int(os.getenv("SCHEDULER_INTERVAL_MINUTES", "15")),
+        recent_failure_skip_minutes=int(os.getenv("RECENT_FAILURE_SKIP_MINUTES", "45")),
+
+        category_sources=_parse_category_sources("CATEGORY_SOURCES"),
+        category_publish_plan=_parse_publish_plan("CATEGORY_PUBLISH_PLAN"),
+
+        breaking_min_sources=int(os.getenv("BREAKING_MIN_SOURCES", "2")),
+        breaking_window_minutes=int(os.getenv("BREAKING_WINDOW_MINUTES", "30")),
+        breaking_confidence_threshold=float(os.getenv("BREAKING_CONFIDENCE_THRESHOLD", "0.6")),
+        source_credibility=_parse_json_env("SOURCE_CREDIBILITY", DEFAULT_SOURCE_CREDIBILITY),
+
+        resolver_title_similarity=float(os.getenv("RESOLVER_TITLE_SIMILARITY", "0.78")),
+        resolver_content_similarity=float(os.getenv("RESOLVER_CONTENT_SIMILARITY", "0.45")),
+        resolver_time_window_minutes=int(os.getenv("RESOLVER_TIME_WINDOW_MINUTES", "180")),
+
+        image_quality_thresholds=_parse_json_env("IMAGE_QUALITY_THRESHOLDS", DEFAULT_IMAGE_THRESHOLDS),
     )
+

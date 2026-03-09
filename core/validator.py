@@ -1,28 +1,15 @@
-"""
-STRICT VALIDATOR - Pre-Flight Validation Gate.
-
-This module ensures ArticleData is PERFECT before browser execution.
-If validation fails, the browser is NEVER touched.
-
-Failure Classification:
-- CONTENT_VALIDATION_FAILURE: Data is invalid, discard article
-- All other failures are browser-level (handled by Orchestrator)
-"""
+﻿"""STRICT VALIDATOR - Pre-Flight Validation Gate."""
 
 import os
 import re
 from enum import Enum
 from dataclasses import dataclass
-from typing import Tuple, Optional
+from typing import Optional
 from utils.logger import get_logger
 
 
 class FailureType(str, Enum):
-    """Strict failure classification. Each has ONE recovery path."""
-    # Pre-Browser (Validation)
     CONTENT_VALIDATION_FAILURE = "content_validation_failure"
-    
-    # Browser-Level
     LOGIN_FAILURE = "login_failure"
     NAVIGATION_FAILURE = "navigation_failure"
     REACT_STATE_CORRUPTION = "react_state_corruption"
@@ -35,15 +22,13 @@ class FailureType(str, Enum):
 
 
 class RecoveryAction(str, Enum):
-    """Allowed recovery actions. NEVER chain these."""
-    DISCARD_ARTICLE = "discard_article"       # Skip this article
-    RETRY_ACTION = "retry_action"             # Retry same action once
-    RELOAD_PAGE = "reload_page"               # Clear React state
-    RESTART_BROWSER = "restart_browser"       # Full browser restart
-    ABORT_PROCESS = "abort_process"           # Stop execution
+    DISCARD_ARTICLE = "discard_article"
+    RETRY_ACTION = "retry_action"
+    RELOAD_PAGE = "reload_page"
+    RESTART_BROWSER = "restart_browser"
+    ABORT_PROCESS = "abort_process"
 
 
-# Recovery Matrix (STRICT)
 RECOVERY_MATRIX = {
     FailureType.CONTENT_VALIDATION_FAILURE: RecoveryAction.DISCARD_ARTICLE,
     FailureType.LOGIN_FAILURE: RecoveryAction.RETRY_ACTION,
@@ -58,164 +43,118 @@ RECOVERY_MATRIX = {
 }
 
 
-# Valid CMS Categories (EXACT match required)
 VALID_CATEGORIES = [
-    "National",
+    "Technology",
+    "Crime",
+    "Education",
+    "Environment",
+    "Finance",
+    "Health",
+    "Andhra Pradesh",
+    "Telangana",
+    "State",
     "International",
+    "National",
     "Politics",
-    "Business",
     "Sports",
     "Entertainment",
-    "Technology",
-    "Health",
     "Lifestyle",
     "Spiritual",
+    # Backward compatibility for old mapping
+    "Business",
 ]
 
 
 @dataclass
 class ValidationResult:
-    """Result of validation check."""
     is_valid: bool
     failure_type: Optional[FailureType] = None
     error_message: str = ""
 
 
 class ArticleValidator:
-    """
-    Pre-flight validation gate.
-    
-    Ensures ArticleData meets all requirements BEFORE browser execution.
-    """
-    
-    # Character limits (CMS constraints – match form: 80 title, 380 content)
     MIN_TITLE_LEN = 10
     MAX_TITLE_LEN = 80
     MIN_BODY_LEN = 50
-    MAX_BODY_LEN = 380
-    
-    # Telugu purity threshold
-    MIN_TELUGU_PURITY = 80.0  # Percentage
-    
+    MIN_TELUGU_TITLE_PURITY = 72.0
+    MIN_TELUGU_BODY_PURITY = 80.0
+    ALLOWED_ENGLISH_TOKENS = {
+        "us", "uk", "un", "ai", "pm", "cm", "bjp", "congress", "g20", "who", "isro",
+        "nato", "iran", "israel", "india", "modi", "trump", "rahul", "gandhi", "rbi", "mea", "icc",
+    }
+
     def __init__(self):
         self.logger = get_logger("validator")
-    
-    def validate(self, english_title: str, english_body: str,
-                 telugu_title: str, telugu_body: str,
-                 category: str, image_path: Optional[str],
-                 hashtag: str, image_search_query: str = "") -> ValidationResult:
-        """
-        Validate all fields. Returns ValidationResult.
-        
-        If is_valid=False, browser must NOT be touched.
-        """
-        # 1. English Title
+
+    def validate(
+        self,
+        english_title: str,
+        english_body: str,
+        telugu_title: str,
+        telugu_body: str,
+        category: str,
+        image_path: Optional[str],
+        hashtag: str,
+        image_search_query: str = "",
+        allow_missing_image: bool = False,
+    ) -> ValidationResult:
         if not english_title or len(english_title) < self.MIN_TITLE_LEN:
-            return ValidationResult(
-                is_valid=False,
-                failure_type=FailureType.CONTENT_VALIDATION_FAILURE,
-                error_message=f"English title too short: {len(english_title or '')} chars"
-            )
-        
+            return ValidationResult(False, FailureType.CONTENT_VALIDATION_FAILURE, "English title too short")
         if len(english_title) > self.MAX_TITLE_LEN:
-            return ValidationResult(
-                is_valid=False,
-                failure_type=FailureType.CONTENT_VALIDATION_FAILURE,
-                error_message=f"English title too long: {len(english_title)} chars"
-            )
-        
-        # 2. English Body
+            return ValidationResult(False, FailureType.CONTENT_VALIDATION_FAILURE, "English title too long")
+
         if not english_body or len(english_body) < self.MIN_BODY_LEN:
-            return ValidationResult(
-                is_valid=False,
-                failure_type=FailureType.CONTENT_VALIDATION_FAILURE,
-                error_message=f"English body too short: {len(english_body or '')} chars"
-            )
-        
-        # 3. Telugu Title (with purity check)
+            return ValidationResult(False, FailureType.CONTENT_VALIDATION_FAILURE, "English body too short")
+
         if not telugu_title or len(telugu_title) < self.MIN_TITLE_LEN:
-            return ValidationResult(
-                is_valid=False,
-                failure_type=FailureType.CONTENT_VALIDATION_FAILURE,
-                error_message=f"Telugu title too short: {len(telugu_title or '')} chars"
-            )
-        
-        telugu_title_purity = self._telugu_percentage(telugu_title)
-        if telugu_title_purity < self.MIN_TELUGU_PURITY:
-            return ValidationResult(
-                is_valid=False,
-                failure_type=FailureType.CONTENT_VALIDATION_FAILURE,
-                error_message=f"Telugu title purity too low: {telugu_title_purity:.1f}%"
-            )
-        
-        # 4. Telugu Body (with purity check)
+            return ValidationResult(False, FailureType.CONTENT_VALIDATION_FAILURE, "Telugu title too short")
+        if self._telugu_percentage(telugu_title) < self.MIN_TELUGU_TITLE_PURITY:
+            return ValidationResult(False, FailureType.CONTENT_VALIDATION_FAILURE, "Telugu title purity too low")
+
         if not telugu_body or len(telugu_body) < self.MIN_BODY_LEN:
-            return ValidationResult(
-                is_valid=False,
-                failure_type=FailureType.CONTENT_VALIDATION_FAILURE,
-                error_message=f"Telugu body too short: {len(telugu_body or '')} chars"
-            )
-        
-        telugu_body_purity = self._telugu_percentage(telugu_body)
-        if telugu_body_purity < self.MIN_TELUGU_PURITY:
-            return ValidationResult(
-                is_valid=False,
-                failure_type=FailureType.CONTENT_VALIDATION_FAILURE,
-                error_message=f"Telugu body purity too low: {telugu_body_purity:.1f}%"
-            )
-        
-        # 5. Category (EXACT match)
+            return ValidationResult(False, FailureType.CONTENT_VALIDATION_FAILURE, "Telugu body too short")
+        if self._telugu_percentage(telugu_body) < self.MIN_TELUGU_BODY_PURITY:
+            return ValidationResult(False, FailureType.CONTENT_VALIDATION_FAILURE, "Telugu body purity too low")
+
         if category not in VALID_CATEGORIES:
-            return ValidationResult(
-                is_valid=False,
-                failure_type=FailureType.CONTENT_VALIDATION_FAILURE,
-                error_message=f"Invalid category: {category}"
-            )
-        
-        # 6. Image (must exist or have search query)
+            return ValidationResult(False, FailureType.CONTENT_VALIDATION_FAILURE, f"Invalid category: {category}")
+
         if image_path:
             if not os.path.exists(image_path):
-                return ValidationResult(
-                    is_valid=False,
-                    failure_type=FailureType.CONTENT_VALIDATION_FAILURE,
-                    error_message=f"Image not found: {image_path}"
-                )
-            # Check file size
-            if os.path.getsize(image_path) < 1000:  # < 1KB is suspicious
-                return ValidationResult(
-                    is_valid=False,
-                    failure_type=FailureType.CONTENT_VALIDATION_FAILURE,
-                    error_message=f"Image too small: {os.path.getsize(image_path)} bytes"
-                )
+                return ValidationResult(False, FailureType.CONTENT_VALIDATION_FAILURE, f"Image not found: {image_path}")
+            if os.path.getsize(image_path) < 1000:
+                return ValidationResult(False, FailureType.CONTENT_VALIDATION_FAILURE, "Image too small")
         elif image_search_query:
-            # Valid: We will search for this image later
             pass
-        else:
-            # Image is mandatory
-            return ValidationResult(
-                is_valid=False,
-                failure_type=FailureType.CONTENT_VALIDATION_FAILURE,
-                error_message="Image (or search query) is required"
-            )
-        
-        # 7. Hashtag (basic check)
+        elif not allow_missing_image:
+            return ValidationResult(False, FailureType.CONTENT_VALIDATION_FAILURE, "Image (or search query) is required")
+
         if not hashtag or not hashtag.startswith("#"):
-            # Auto-fix instead of reject
-            self.logger.warning(f"Hashtag auto-fixed: '{hashtag}' -> '#news'")
-            # Note: We don't modify the input here, orchestrator should handle
-        
-        # ALL CHECKS PASSED
-        self.logger.info("✅ Validation PASSED")
+            self.logger.warning("Hashtag does not start with #")
+
         return ValidationResult(is_valid=True)
-    
+
     def _telugu_percentage(self, text: str) -> float:
-        """Calculate percentage of Telugu Unicode characters."""
         if not text:
             return 0.0
-        telugu_chars = sum(1 for c in text if '\u0C00' <= c <= '\u0C7F')
-        total_chars = sum(1 for c in text if not c.isspace())
-        return (telugu_chars / total_chars * 100) if total_chars > 0 else 0.0
-    
+
+        clean_chars = [c for c in text if not c.isspace()]
+        total_chars = len(clean_chars)
+        if total_chars == 0:
+            return 0.0
+
+        telugu_chars = sum(1 for c in clean_chars if "\u0C00" <= c <= "\u0C7F")
+
+        allowed_english_chars = 0
+        for token in re.findall(r"[A-Za-z]{2,}", text):
+            if token.lower() in self.ALLOWED_ENGLISH_TOKENS:
+                allowed_english_chars += len(token)
+
+        purity_chars = min(total_chars, telugu_chars + allowed_english_chars)
+        return (purity_chars / total_chars) * 100.0
+
     def get_recovery_action(self, failure_type: FailureType) -> RecoveryAction:
-        """Get the correct recovery action for a failure type."""
         return RECOVERY_MATRIX.get(failure_type, RecoveryAction.DISCARD_ARTICLE)
+
+
+

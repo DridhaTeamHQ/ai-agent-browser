@@ -1,0 +1,38 @@
+﻿[
+  {
+    "category": "international",
+    "source": "Reuters",
+    "source_url": "https://www.reuters.com/world/",
+    "url": "https://example.com/a1",
+    "title": "Leaders meet after border incident as talks continue",
+    "body": "Diplomats met late Tuesday after a border incident. Negotiations continue and both sides requested de-escalation.",
+    "published_time": "2026-03-05T10:00:00Z"
+  },
+  {
+    "category": "international",
+    "source": "BBC",
+    "source_url": "https://www.bbc.com/news",
+    "url": "https://example.com/a2",
+    "title": "Border incident prompts emergency talks between leaders",
+    "body": "Emergency talks were held after a border incident. Officials said the two countries are negotiating a quick de-escalation.",
+    "published_time": "2026-03-05T10:18:00Z"
+  },
+  {
+    "category": "international",
+    "source": "Guardian",
+    "source_url": "https://www.theguardian.com/world",
+    "url": "https://example.com/a3",
+    "title": "Emergency talks continue after border clash",
+    "body": "Following the border clash, diplomatic talks continue. Both sides said further meetings are planned.",
+    "published_time": "2026-03-05T10:21:00Z"
+  },
+  {
+    "category": "business",
+    "source": "Reuters",
+    "source_url": "https://www.reuters.com/world/",
+    "url": "https://example.com/b1",
+    "title": "Central bank keeps rates unchanged amid inflation concerns",
+    "body": "The central bank kept rates unchanged and signaled caution while inflation remains elevated.",
+    "published_time": "2026-03-05T09:00:00Z"
+  }
+]

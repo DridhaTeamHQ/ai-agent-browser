@@ -1,0 +1,176 @@
+﻿<svg width="1920" height="1080" viewBox="0 0 1920 1080" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1920" y2="1080" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F7F4ED"/>
+      <stop offset="0.48" stop-color="#F4EADB"/>
+      <stop offset="1" stop-color="#E7EFE7"/>
+    </linearGradient>
+    <linearGradient id="navy" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#132238"/>
+      <stop offset="1" stop-color="#0B1422"/>
+    </linearGradient>
+    <linearGradient id="amber" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#E76D2A"/>
+      <stop offset="1" stop-color="#F2B84B"/>
+    </linearGradient>
+    <linearGradient id="mint" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#E0F2E8"/>
+      <stop offset="1" stop-color="#CBE5D8"/>
+    </linearGradient>
+    <linearGradient id="cream" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFF8ED"/>
+      <stop offset="1" stop-color="#F8EBD8"/>
+    </linearGradient>
+    <linearGradient id="uiGlow" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#324866"/>
+      <stop offset="1" stop-color="#172739"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#142033" flood-opacity="0.16"/>
+    </filter>
+    <filter id="cardShadow" x="-25%" y="-25%" width="150%" height="170%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#142033" flood-opacity="0.14"/>
+    </filter>
+    <style>
+      .eyebrow { font-family: "Segoe UI", Arial, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 1.4px; fill: #5F6F82; }
+      .hero { font-family: Georgia, "Times New Roman", serif; font-size: 56px; font-weight: 700; fill: #132238; }
+      .subhero { font-family: "Segoe UI", Arial, sans-serif; font-size: 20px; font-weight: 400; fill: #4B5A6C; }
+      .section { font-family: Georgia, "Times New Roman", serif; font-size: 28px; font-weight: 700; fill: #132238; }
+      .cardTitle { font-family: "Segoe UI", Arial, sans-serif; font-size: 20px; font-weight: 700; fill: #132238; }
+      .cardBody { font-family: "Segoe UI", Arial, sans-serif; font-size: 17px; font-weight: 400; fill: #516276; }
+      .uiTitle { font-family: Georgia, "Times New Roman", serif; font-size: 30px; font-weight: 700; fill: #F7F3EB; }
+      .uiText { font-family: "Segoe UI", Arial, sans-serif; font-size: 16px; font-weight: 400; fill: #D6DFE7; }
+      .chip { font-family: "Segoe UI", Arial, sans-serif; font-size: 12px; font-weight: 700; letter-spacing: 0.7px; fill: #F8F3E9; }
+      .metricNum { font-family: "Segoe UI", Arial, sans-serif; font-size: 32px; font-weight: 700; fill: #132238; }
+      .metricLab { font-family: "Segoe UI", Arial, sans-serif; font-size: 13px; font-weight: 700; letter-spacing: 1px; fill: #6A788B; }
+      .darkTitle { font-family: "Segoe UI", Arial, sans-serif; font-size: 20px; font-weight: 700; fill: #F3F6F8; }
+      .darkBody { font-family: "Segoe UI", Arial, sans-serif; font-size: 16px; font-weight: 400; fill: #C8D3DE; }
+    </style>
+  </defs>
+
+  <rect width="1920" height="1080" fill="url(#bg)"/>
+  <circle cx="1688" cy="118" r="220" fill="#F4D58E" fill-opacity="0.28"/>
+  <circle cx="226" cy="930" r="250" fill="#B7DCCE" fill-opacity="0.28"/>
+  <circle cx="1264" cy="960" r="180" fill="#F2C5A0" fill-opacity="0.20"/>
+
+  <rect x="40" y="34" width="1840" height="1010" rx="30" fill="#FCFAF6" stroke="#E8DFD0" stroke-width="2"/>
+
+  <text x="88" y="104" class="eyebrow">CEO PRESENTATION FRAME</text>
+  <text x="88" y="176" class="hero">Autonomous News Intelligence Platform</text>
+  <text x="88" y="218" class="subhero">A controlled, explainable publishing system that ingests trusted sources, resolves duplicate events, scores urgency, writes bilingual copy and delivers CMS-ready news cards.</text>
+
+  <rect x="88" y="260" width="252" height="110" rx="22" fill="#F9F1E1" stroke="#E7D7B7"/>
+  <rect x="360" y="260" width="252" height="110" rx="22" fill="#EAF3EE" stroke="#D4E5D9"/>
+  <rect x="632" y="260" width="252" height="110" rx="22" fill="#EEF2F7" stroke="#D8E1EA"/>
+  <rect x="904" y="260" width="252" height="110" rx="22" fill="#FFF3EB" stroke="#F1D7C8"/>
+
+  <text x="116" y="304" class="metricNum">6</text>
+  <text x="116" y="332" class="metricLab">TRUSTED SOURCES</text>
+  <text x="116" y="352" class="cardBody">BBC, Reuters, Guardian, TOI, The Hindu, Al Jazeera</text>
+
+  <text x="388" y="304" class="metricNum">4</text>
+  <text x="388" y="332" class="metricLab">ARCHITECTURE LAYERS</text>
+  <text x="388" y="352" class="cardBody">Ingestion, resolution, generation, delivery</text>
+
+  <text x="660" y="304" class="metricNum">3</text>
+  <text x="660" y="332" class="metricLab">CONTROL GATES</text>
+  <text x="660" y="352" class="cardBody">Image, taxonomy, CMS publish verification</text>
+
+  <text x="932" y="304" class="metricNum">2</text>
+  <text x="932" y="332" class="metricLab">CONTENT MODES</text>
+  <text x="932" y="352" class="cardBody">English hook package plus Telugu newsroom rewrite</text>
+
+  <rect x="88" y="410" width="980" height="566" rx="28" fill="url(#navy)" filter="url(#softShadow)"/>
+  <text x="124" y="458" class="eyebrow" fill="#89A1B7">SYSTEM FLOW</text>
+  <text x="124" y="504" class="uiTitle">Layered workers, centrally orchestrated</text>
+
+  <rect x="124" y="540" width="208" height="144" rx="20" fill="#10243A" stroke="#243B57"/>
+  <rect x="352" y="540" width="208" height="144" rx="20" fill="#10243A" stroke="#243B57"/>
+  <rect x="580" y="540" width="208" height="144" rx="20" fill="#10243A" stroke="#243B57"/>
+  <rect x="808" y="540" width="224" height="144" rx="20" fill="#152B43" stroke="#2A4767"/>
+  <rect x="238" y="720" width="208" height="144" rx="20" fill="#10243A" stroke="#243B57"/>
+  <rect x="466" y="720" width="208" height="144" rx="20" fill="#10243A" stroke="#243B57"/>
+  <rect x="694" y="720" width="224" height="144" rx="20" fill="#152B43" stroke="#2A4767"/>
+
+  <text x="146" y="578" class="darkTitle">Source Agents</text>
+  <text x="146" y="608" class="darkBody">Category-specific scrapers pull from business, world, technology, environment and sports sections.</text>
+
+  <text x="374" y="578" class="darkTitle">Event Resolver</text>
+  <text x="374" y="608" class="darkBody">Similarity matching merges duplicate stories into one canonical event cluster with shared sources.</text>
+
+  <text x="602" y="578" class="darkTitle">Breaking Engine</text>
+  <text x="602" y="608" class="darkBody">Weighted confidence uses source count, trust weighting, freshness window and threshold gates.</text>
+
+  <text x="830" y="578" class="darkTitle">Taxonomy Router</text>
+  <text x="830" y="608" class="darkBody">Geo-aware and topic-aware rules keep UK, wildlife and AI stories out of generic National buckets.</text>
+
+  <text x="260" y="758" class="darkTitle">Content Generation</text>
+  <text x="260" y="788" class="darkBody">OpenAI generates English title and body, then Telugu rewrite enforces newsroom tone and purity checks.</text>
+
+  <text x="488" y="758" class="darkTitle">Quality Gates</text>
+  <text x="488" y="788" class="darkBody">Image validation, signed URL handling, fallback control and final article validation happen before publish.</text>
+
+  <text x="716" y="758" class="darkTitle">CMS Delivery</text>
+  <text x="716" y="788" class="darkBody">Playwright creates the article, verifies category selection, uploads media and records success in memory.</text>
+
+  <path d="M332 612 H352" stroke="#F2B84B" stroke-width="4"/>
+  <path d="M560 612 H580" stroke="#F2B84B" stroke-width="4"/>
+  <path d="M788 612 H808" stroke="#F2B84B" stroke-width="4"/>
+  <path d="M456 684 V720" stroke="#F2B84B" stroke-width="4"/>
+  <path d="M684 684 V720" stroke="#F2B84B" stroke-width="4"/>
+  <path d="M918 684 V720" stroke="#F2B84B" stroke-width="4"/>
+
+  <rect x="1102" y="410" width="730" height="272" rx="28" fill="url(#cream)" stroke="#E7D9C1" filter="url(#cardShadow)"/>
+  <text x="1138" y="458" class="eyebrow">BREAKING MODEL</text>
+  <text x="1138" y="506" class="section">Explainable urgency scoring</text>
+
+  <rect x="1138" y="536" width="312" height="112" rx="20" fill="#FFFCF7" stroke="#E9DDCA"/>
+  <text x="1164" y="576" class="cardTitle">Confidence formula</text>
+  <text x="1164" y="606" class="cardBody">Source credibility average: 50%</text>
+  <text x="1164" y="630" class="cardBody">Source-count factor: 35%</text>
+
+  <rect x="1470" y="536" width="326" height="112" rx="20" fill="#FFFCF7" stroke="#E9DDCA"/>
+  <text x="1496" y="576" class="cardTitle">Freshness gates</text>
+  <text x="1496" y="606" class="cardBody">Minimum sources: 2</text>
+  <text x="1496" y="630" class="cardBody">Breaking window: 30 minutes</text>
+
+  <text x="1138" y="660" class="cardBody">Clusters must pass source count, weighted trust, time compression and confidence threshold before promotion.</text>
+
+  <rect x="1102" y="708" width="730" height="268" rx="28" fill="url(#mint)" stroke="#C9DECF" filter="url(#cardShadow)"/>
+  <text x="1138" y="756" class="eyebrow">ARCHITECTURE POSITIONING</text>
+  <text x="1138" y="804" class="section">Multi-level, but intentionally controlled</text>
+  <text x="1138" y="850" class="cardBody">This is not a free-form agent swarm. It is a layered worker architecture with one orchestrator controlling specialized modules for scraping, event resolution, urgency scoring, content generation and browser delivery.</text>
+  <text x="1138" y="892" class="cardBody">That makes the system easier to debug, safer to operate and much more credible in a newsroom workflow.</text>
+
+  <g filter="url(#cardShadow)">
+    <rect x="88" y="742" width="292" height="210" rx="28" fill="#0E1727"/>
+    <rect x="106" y="760" width="256" height="126" rx="18" fill="url(#uiGlow)"/>
+    <rect x="112" y="894" width="104" height="30" rx="15" fill="#E96B2C"/>
+    <rect x="224" y="894" width="114" height="30" rx="15" fill="#33475E"/>
+    <text x="137" y="913" class="chip">TECHNOLOGY</text>
+    <text x="246" y="913" class="chip">CMS VERIFIED</text>
+    <text x="112" y="950" class="uiText">AI regulation, product and digital rights coverage can be routed into a true technology lane.</text>
+  </g>
+
+  <g filter="url(#cardShadow)">
+    <rect x="398" y="742" width="292" height="210" rx="28" fill="#0E1727"/>
+    <rect x="416" y="760" width="256" height="126" rx="18" fill="#304133"/>
+    <rect x="422" y="894" width="116" height="30" rx="15" fill="#3E8B60"/>
+    <rect x="546" y="894" width="102" height="30" rx="15" fill="#33475E"/>
+    <text x="446" y="913" class="chip">ENVIRONMENT</text>
+    <text x="569" y="913" class="chip">GLOBAL</text>
+    <text x="422" y="950" class="uiText">Wildlife restoration, biodiversity and ecology stories become a visible product category instead of noise.</text>
+  </g>
+
+  <g filter="url(#cardShadow)">
+    <rect x="708" y="742" width="292" height="210" rx="28" fill="#0E1727"/>
+    <rect x="726" y="760" width="256" height="126" rx="18" fill="#433527"/>
+    <rect x="732" y="894" width="126" height="30" rx="15" fill="#D98A2F"/>
+    <rect x="866" y="894" width="92" height="30" rx="15" fill="#33475E"/>
+    <text x="761" y="913" class="chip">BREAKING SCORE</text>
+    <text x="890" y="913" class="chip">SAFE</text>
+    <text x="732" y="950" class="uiText">Only items that survive scoring, quality gates and taxonomy verification make it to automated publish.</text>
+  </g>
+
+  <text x="1106" y="1008" class="eyebrow">DESIGN DIRECTION: PROFESSIONAL, EXPLAINABLE, INVESTOR-SAFE AUTOMATION</text>
+</svg>

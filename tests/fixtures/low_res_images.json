@@ -1,0 +1,5 @@
+﻿[
+  {"url": "https://cdn.example.com/thumb-200.jpg", "reason": "resolution_too_low"},
+  {"url": "https://cdn.example.com/logo.png", "reason": "url_pattern_rejected"},
+  {"url": "https://cdn.example.com/blurred-1280.jpg", "reason": "blur_detected"}
+]

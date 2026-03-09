@@ -1,0 +1,173 @@
+﻿<svg width="1920" height="1080" viewBox="0 0 1920 1080" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1920" y2="1080" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0F172A"/>
+      <stop offset="1" stop-color="#1E293B"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#0B1220"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1F2937"/>
+      <stop offset="1" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="ok" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#10B981"/>
+      <stop offset="1" stop-color="#22D3EE"/>
+    </linearGradient>
+    <linearGradient id="warn" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#F59E0B"/>
+      <stop offset="1" stop-color="#F97316"/>
+    </linearGradient>
+    <linearGradient id="err" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#F43F5E"/>
+      <stop offset="1" stop-color="#FB7185"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-40%" width="160%" height="220%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+    <marker id="arrowBlue" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#38BDF8"/>
+    </marker>
+    <marker id="arrowWarn" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#F59E0B"/>
+    </marker>
+    <marker id="arrowErr" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#FB7185"/>
+    </marker>
+    <style>
+      .title { font-family: "Segoe UI", Arial, sans-serif; font-size: 44px; font-weight: 700; fill: #F8FAFC; }
+      .subtitle { font-family: "Segoe UI", Arial, sans-serif; font-size: 20px; font-weight: 400; fill: #CBD5E1; }
+      .laneTitle { font-family: "Segoe UI", Arial, sans-serif; font-size: 20px; font-weight: 700; fill: #E2E8F0; letter-spacing: 0.6px; }
+      .cardTitle { font-family: "Segoe UI", Arial, sans-serif; font-size: 22px; font-weight: 700; fill: #F1F5F9; }
+      .cardBody { font-family: "Segoe UI", Arial, sans-serif; font-size: 17px; font-weight: 400; fill: #CBD5E1; }
+      .small { font-family: "Segoe UI", Arial, sans-serif; font-size: 15px; font-weight: 500; fill: #94A3B8; }
+      .metric { font-family: "Segoe UI", Arial, sans-serif; font-size: 16px; font-weight: 600; fill: #E2E8F0; }
+      .legend { font-family: "Segoe UI", Arial, sans-serif; font-size: 14px; font-weight: 600; fill: #CBD5E1; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1920" height="1080" fill="url(#bg)"/>
+
+  <text x="70" y="78" class="title">Autonomous AI News Publishing Platform</text>
+  <text x="70" y="112" class="subtitle">End-to-end flow: multi-source ingestion -&gt; intelligence -&gt; bilingual content -&gt; quality gates -&gt; CMS publish</text>
+
+  <rect x="58" y="146" width="1804" height="862" rx="24" fill="url(#panel)" stroke="#334155" stroke-width="1.5"/>
+
+  <text x="92" y="196" class="laneTitle">1) SOURCE INGESTION</text>
+  <rect x="82" y="214" width="314" height="186" rx="18" fill="url(#card)" stroke="#334155" filter="url(#shadow)"/>
+  <text x="104" y="252" class="cardTitle">Trusted Source Adapters</text>
+  <text x="104" y="283" class="cardBody">BBC | Al Jazeera | Guardian</text>
+  <text x="104" y="309" class="cardBody">TOI | The Hindu | Reuters</text>
+  <text x="104" y="345" class="small">Category-specific section scraping</text>
+  <text x="104" y="368" class="small">Structured article extraction</text>
+
+  <rect x="434" y="214" width="314" height="186" rx="18" fill="url(#card)" stroke="#334155" filter="url(#shadow)"/>
+  <text x="456" y="252" class="cardTitle">MultiAgentIngestion</text>
+  <text x="456" y="286" class="cardBody">Parallel category collectors</text>
+  <text x="456" y="312" class="cardBody">Per-source cache + dedupe hints</text>
+  <text x="456" y="347" class="small">Output: articles grouped by category</text>
+
+  <text x="92" y="456" class="laneTitle">2) INTELLIGENCE LAYER</text>
+  <rect x="82" y="474" width="314" height="200" rx="18" fill="url(#card)" stroke="#334155" filter="url(#shadow)"/>
+  <text x="104" y="512" class="cardTitle">EventResolver</text>
+  <text x="104" y="546" class="cardBody">Clusters related stories</text>
+  <text x="104" y="572" class="cardBody">Title + content + time windows</text>
+  <text x="104" y="607" class="small">Output: event clusters</text>
+
+  <rect x="434" y="474" width="314" height="200" rx="18" fill="url(#card)" stroke="#334155" filter="url(#shadow)"/>
+  <text x="456" y="512" class="cardTitle">Breaking Classifier</text>
+  <text x="456" y="546" class="cardBody">Confidence scoring</text>
+  <text x="456" y="572" class="cardBody">Source credibility weighting</text>
+  <text x="456" y="607" class="small">Promotes fallback breaking items</text>
+
+  <rect x="786" y="474" width="314" height="200" rx="18" fill="url(#card)" stroke="#334155" filter="url(#shadow)"/>
+  <text x="808" y="512" class="cardTitle">Publish Planner</text>
+  <text x="808" y="546" class="cardBody">Per-category quotas</text>
+  <text x="808" y="572" class="cardBody">Source backoff on repeated fails</text>
+  <text x="808" y="607" class="small">Chooses next best candidate</text>
+
+  <text x="92" y="730" class="laneTitle">3) CONTENT + QUALITY + DELIVERY</text>
+  <rect x="82" y="748" width="314" height="224" rx="18" fill="url(#card)" stroke="#334155" filter="url(#shadow)"/>
+  <text x="104" y="786" class="cardTitle">LLM Content Pipeline</text>
+  <text x="104" y="820" class="cardBody">Summarizer (hook + flow rules)</text>
+  <text x="104" y="846" class="cardBody">Telugu writer (purity checks)</text>
+  <text x="104" y="881" class="small">Validator: title/body/category/hashtag</text>
+  <text x="104" y="904" class="small">Retries if style constraints fail</text>
+
+  <rect x="434" y="748" width="314" height="224" rx="18" fill="url(#card)" stroke="#334155" filter="url(#shadow)"/>
+  <text x="456" y="786" class="cardTitle">Image Quality Pipeline</text>
+  <text x="456" y="820" class="cardBody">Collects candidate media URLs</text>
+  <text x="456" y="846" class="cardBody">Rejects branding/overlay/low-quality</text>
+  <text x="456" y="881" class="small">Handles signed CDN URL constraints</text>
+  <text x="456" y="904" class="small">Fallback to safe source image URL</text>
+
+  <rect x="786" y="748" width="314" height="224" rx="18" fill="url(#card)" stroke="#334155" filter="url(#shadow)"/>
+  <text x="808" y="786" class="cardTitle">CMS Publisher (Playwright)</text>
+  <text x="808" y="820" class="cardBody">Create article + fill form</text>
+  <text x="808" y="846" class="cardBody">Category verify + publish retries</text>
+  <text x="808" y="881" class="small">Writes success/failure to memory</text>
+  <text x="808" y="904" class="small">Final output to newsroom CMS</text>
+
+  <rect x="1138" y="214" width="690" height="758" rx="18" fill="#0A101D" stroke="#334155" filter="url(#shadow)"/>
+  <text x="1164" y="252" class="cardTitle">Resilience and Control Plane</text>
+
+  <rect x="1164" y="274" width="310" height="150" rx="14" fill="#111827" stroke="#334155"/>
+  <text x="1186" y="309" class="metric">Memory Layer</text>
+  <text x="1186" y="337" class="cardBody">- Success history (avoid duplicates)</text>
+  <text x="1186" y="362" class="cardBody">- Recent failure cooldown</text>
+  <text x="1186" y="387" class="cardBody">- Failure reason tracing</text>
+
+  <rect x="1492" y="274" width="310" height="150" rx="14" fill="#111827" stroke="#334155"/>
+  <text x="1514" y="309" class="metric">Observability</text>
+  <text x="1514" y="337" class="cardBody">- Scrape/cluster/breaking metrics</text>
+  <text x="1514" y="362" class="cardBody">- Image pass/fail reason counts</text>
+  <text x="1514" y="387" class="cardBody">- Run completion stats</text>
+
+  <rect x="1164" y="444" width="638" height="244" rx="14" fill="#111827" stroke="#334155"/>
+  <text x="1186" y="479" class="metric">Failure Router (why fallbacks happen)</text>
+  <line x1="1190" y1="507" x2="1780" y2="507" stroke="#334155"/>
+  <text x="1188" y="540" class="cardBody">1. `image_missing` -&gt; promote next cluster/article</text>
+  <text x="1188" y="570" class="cardBody">2. `telugu_failed` -&gt; retry policy -&gt; then fallback candidate</text>
+  <text x="1188" y="600" class="cardBody">3. `workflow_failed` (CMS verify/publish) -&gt; retry -&gt; fallback</text>
+  <text x="1188" y="630" class="cardBody">4. Source-level fail streak -&gt; source backoff in selection</text>
+  <text x="1188" y="660" class="cardBody">5. Guardrails stop infinite loops after consecutive failures</text>
+
+  <rect x="1164" y="708" width="638" height="242" rx="14" fill="#111827" stroke="#334155"/>
+  <text x="1186" y="743" class="metric">Signed URL Behavior (Guardian example)</text>
+  <line x1="1190" y1="771" x2="1780" y2="771" stroke="#334155"/>
+  <text x="1188" y="804" class="cardBody">- Parameterized URLs often work: `?width=1200...` -&gt; 200 OK</text>
+  <text x="1188" y="834" class="cardBody">- Raw master URL often fails: `.../master/xxxx.jpg` -&gt; 401</text>
+  <text x="1188" y="864" class="cardBody">- Invalid crop/signature variants -&gt; 401 invalid signature</text>
+  <text x="1188" y="894" class="cardBody">- Pipeline keeps only verified, fetchable variants</text>
+  <text x="1188" y="924" class="cardBody">- If no valid image survives, item is skipped, next candidate promoted</text>
+
+  <path d="M396 307 L434 307" stroke="#38BDF8" stroke-width="4" marker-end="url(#arrowBlue)"/>
+  <path d="M396 574 L434 574" stroke="#38BDF8" stroke-width="4" marker-end="url(#arrowBlue)"/>
+  <path d="M748 574 L786 574" stroke="#38BDF8" stroke-width="4" marker-end="url(#arrowBlue)"/>
+  <path d="M396 860 L434 860" stroke="#38BDF8" stroke-width="4" marker-end="url(#arrowBlue)"/>
+  <path d="M748 860 L786 860" stroke="#38BDF8" stroke-width="4" marker-end="url(#arrowBlue)"/>
+
+  <path d="M591 400 L591 474" stroke="#38BDF8" stroke-width="4" marker-end="url(#arrowBlue)"/>
+  <path d="M943 674 L943 748" stroke="#38BDF8" stroke-width="4" marker-end="url(#arrowBlue)"/>
+
+  <path d="M1100 860 L1138 860" stroke="#38BDF8" stroke-width="4" marker-end="url(#arrowBlue)"/>
+  <path d="M1100 574 L1138 574" stroke="#38BDF8" stroke-width="4" marker-end="url(#arrowBlue)"/>
+  <path d="M1100 307 L1138 307" stroke="#38BDF8" stroke-width="4" marker-end="url(#arrowBlue)"/>
+
+  <path d="M748 860 C770 860 770 960 591 960 C412 960 412 860 434 860" stroke="#F59E0B" stroke-width="3.5" stroke-dasharray="9 8" marker-end="url(#arrowWarn)"/>
+  <text x="520" y="995" class="legend">fallback loop</text>
+
+  <path d="M1100 820 C1230 820 1230 540 1138 540" stroke="#FB7185" stroke-width="3.5" stroke-dasharray="9 8" marker-end="url(#arrowErr)"/>
+  <text x="1122" y="538" class="legend">error routing</text>
+
+  <rect x="70" y="1024" width="16" height="8" rx="4" fill="url(#ok)"/>
+  <text x="92" y="1033" class="legend">Primary flow</text>
+  <rect x="230" y="1024" width="16" height="8" rx="4" fill="url(#warn)"/>
+  <text x="252" y="1033" class="legend">Fallback and retries</text>
+  <rect x="440" y="1024" width="16" height="8" rx="4" fill="url(#err)"/>
+  <text x="462" y="1033" class="legend">Failure branch</text>
+
+  <text x="1502" y="1034" class="small">Prepared for executive review | Generated from live orchestrator design</text>
+</svg>
