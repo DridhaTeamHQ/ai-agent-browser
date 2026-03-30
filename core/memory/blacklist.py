@@ -44,6 +44,17 @@ class AgentMemory:
                     )
                     """
                 )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS story_history (
+                        story_key TEXT PRIMARY KEY,
+                        status TEXT NOT NULL,
+                        title TEXT,
+                        url TEXT,
+                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
                 conn.commit()
         except Exception as exc:
             self.logger.error(f"DB init failed: {exc}")
@@ -90,6 +101,46 @@ class AgentMemory:
     def mark_success(self, url: str):
         """Mark URL as successfully processed."""
         self._record(url, "success")
+
+    def is_story_success(self, story_key: str, within_hours: int = 48) -> bool:
+        """Check if a story fingerprint was already published recently."""
+        key = (story_key or "").strip()
+        if not key:
+            return False
+        try:
+            with self._get_conn() as conn:
+                cursor = conn.execute(
+                    """
+                    SELECT 1
+                    FROM story_history
+                    WHERE story_key = ?
+                      AND status = 'success'
+                      AND timestamp >= datetime('now', ?)
+                    """,
+                    (key, f"-{int(within_hours)} hours"),
+                )
+                return cursor.fetchone() is not None
+        except Exception:
+            return False
+
+    def mark_story_success(self, story_key: str, url: str = "", title: str = ""):
+        """Mark a story fingerprint as successfully published."""
+        key = (story_key or "").strip()
+        if not key:
+            return
+        try:
+            with self._get_conn() as conn:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO story_history (story_key, status, title, url, timestamp)
+                    VALUES (?, 'success', ?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    (key, (title or "").strip(), (url or "").strip()),
+                )
+                conn.commit()
+            self.logger.info(f"Memory story: {key[:24]} -> success")
+        except Exception as exc:
+            self.logger.error(f"Failed to record story memory: {exc}")
 
     def mark_failed(self, url: str, reason: str):
         """Mark URL as failed."""

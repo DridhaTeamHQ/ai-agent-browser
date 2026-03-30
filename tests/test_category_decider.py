@@ -36,6 +36,15 @@ class CategoryDeciderTests(unittest.TestCase):
         )
         self.assertEqual(category, "Technology")
 
+    def test_hyderabad_civic_story_prefers_telangana(self):
+        category = self.decider.decide(
+            title="Hyderabad civic body expands monsoon emergency teams",
+            body="The Telangana government and GHMC have expanded emergency teams across Hyderabad ahead of heavy rain alerts.",
+            source="The Hindu",
+            pipeline_hint="national",
+        )
+        self.assertEqual(category, "Telangana")
+
 
 if __name__ == "__main__":
     unittest.main()

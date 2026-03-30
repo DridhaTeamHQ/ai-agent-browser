@@ -60,7 +60,6 @@ VALID_CATEGORIES = [
     "Entertainment",
     "Lifestyle",
     "Spiritual",
-    # Backward compatibility for old mapping
     "Business",
 ]
 
@@ -82,6 +81,10 @@ class ArticleValidator:
         "us", "uk", "un", "ai", "pm", "cm", "bjp", "congress", "g20", "who", "isro",
         "nato", "iran", "israel", "india", "modi", "trump", "rahul", "gandhi", "rbi", "mea", "icc",
     }
+    SOURCE_BOILERPLATE_PATTERNS = (
+        r"(?:\b(?:the\s+times\s+of\s+india|times\s+of\s+india|india\s+today|bbc\s+news|al\s*jazeera)\b\.?\s*){1,}",
+        r"\bof\s+india\.\s+of\s+india\b",
+    )
 
     def __init__(self):
         self.logger = get_logger("validator")
@@ -102,12 +105,18 @@ class ArticleValidator:
             return ValidationResult(False, FailureType.CONTENT_VALIDATION_FAILURE, "English title too short")
         if len(english_title) > self.MAX_TITLE_LEN:
             return ValidationResult(False, FailureType.CONTENT_VALIDATION_FAILURE, "English title too long")
+        if "," in english_title:
+            return ValidationResult(False, FailureType.CONTENT_VALIDATION_FAILURE, "English title cannot contain commas")
 
         if not english_body or len(english_body) < self.MIN_BODY_LEN:
             return ValidationResult(False, FailureType.CONTENT_VALIDATION_FAILURE, "English body too short")
+        if self._has_source_boilerplate(english_body):
+            return ValidationResult(False, FailureType.CONTENT_VALIDATION_FAILURE, "English body contains source boilerplate")
 
         if not telugu_title or len(telugu_title) < self.MIN_TITLE_LEN:
             return ValidationResult(False, FailureType.CONTENT_VALIDATION_FAILURE, "Telugu title too short")
+        if "," in telugu_title:
+            return ValidationResult(False, FailureType.CONTENT_VALIDATION_FAILURE, "Telugu title cannot contain commas")
         if self._telugu_percentage(telugu_title) < self.MIN_TELUGU_TITLE_PURITY:
             return ValidationResult(False, FailureType.CONTENT_VALIDATION_FAILURE, "Telugu title purity too low")
 
@@ -156,5 +165,8 @@ class ArticleValidator:
     def get_recovery_action(self, failure_type: FailureType) -> RecoveryAction:
         return RECOVERY_MATRIX.get(failure_type, RecoveryAction.DISCARD_ARTICLE)
 
-
-
+    def _has_source_boilerplate(self, text: str) -> bool:
+        low = " ".join((text or "").split()).lower()
+        if not low:
+            return False
+        return any(re.search(pattern, low, flags=re.IGNORECASE) for pattern in self.SOURCE_BOILERPLATE_PATTERNS)

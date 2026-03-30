@@ -70,6 +70,45 @@ class ImageQualityPipelineTests(unittest.TestCase):
         )
         self.assertEqual(len(candidates), 1)
         self.assertIn("129310476", candidates[0].url)
+    def test_limit_probe_candidates_caps_work_per_article(self):
+        self.pipeline.max_probe_candidates = 3
+        candidates = [
+            ImageCandidate(f"https://example.com/{idx}.jpg", "body", 5, width_hint=100 + idx)
+            for idx in range(6)
+        ]
+        limited = self.pipeline._limit_probe_candidates(candidates)
+        self.assertEqual(len(limited), 3)
+    def test_extract_candidates_filters_unrelated_toi_static_assets(self):
+        html = '''
+        <html>
+          <meta property="og:image" content="https://static.toiimg.com/thumb/msid-129498409,width-1280,height-720,resizemode-6/photo.jpg" />
+          <img src="https://static.toiimg.com/thumb/msid-122244803,width-1280,height-720,resizemode-6/photo.jpg" />
+          <img src="https://static.toiimg.com/thumb/msid-118390705,width-1280,height-720,resizemode-6/photo.jpg" />
+        </html>
+        '''
+        candidates = self.pipeline._extract_candidates(
+            html,
+            "https://timesofindia.indiatimes.com/sports/badminton/he-is-definitely-a-medal-prospect-former-cwg-medallist-backs-lakshya-sen-for-la-olympics-medal/articleshow/129498409.cms",
+        )
+        urls = [cand.url for cand in candidates]
+        self.assertTrue(any("msid-129498409" in url for url in urls))
+        self.assertFalse(any("msid-122244803" in url for url in urls))
+        self.assertFalse(any("msid-118390705" in url for url in urls))
+
+    def test_extract_candidates_filters_unrelated_indiatoday_story_assets(self):
+        html = '''
+        <html>
+          <img src="https://akm-img-a-in.tosshub.com/indiatoday/images/story/202603/oil-tankers-attacked-iran-iraqi-crude-persian-gulf-hormuz-us-israel-war-tensions-16x9_0.jpg" />
+          <img src="https://akm-img-a-in.tosshub.com/indiatoday/images/story/202603/zomato-swiggy-hit-due-to-lpg-crisis-amid-war-deliveries-down-16x9_0.jpg" />
+        </html>
+        '''
+        candidates = self.pipeline._extract_candidates(
+            html,
+            "https://www.indiatoday.in/world/story/oil-tankers-attacked-iran-iraqi-crude-persian-gulf-hormuz-us-israel-war-tensions-2880683-2026-03-12",
+        )
+        urls = [cand.url for cand in candidates]
+        self.assertTrue(any("oil-tankers-attacked-iran-iraqi-crude-persian-gulf-hormuz" in url for url in urls))
+        self.assertFalse(any("zomato-swiggy-hit-due-to-lpg-crisis" in url for url in urls))
     def test_blur_rejection_sets_needs_image(self):
         with patch.object(ImageQualityPipeline, "_fetch_html", return_value="<html></html>"), \
             patch.object(ImageQualityPipeline, "_extract_candidates", return_value=[ImageCandidate("https://x/a.jpg", "og:image", 1)]), \
@@ -80,9 +119,58 @@ class ImageQualityPipelineTests(unittest.TestCase):
         self.assertTrue(result.needs_image)
         self.assertIn("blur_detected", result.rejection_reasons)
 
+    def test_static_image_is_used_when_vision_rejects_all_candidates(self):
+        static_probe = {
+            "ok": True,
+            "score": 0.82,
+            "width": 1280,
+            "height": 720,
+            "bytes_len": 60000,
+            "content_type": "image/jpeg",
+            "sharpness": 28.0,
+            "relevance": 0.42,
+            "bytes": b"fake-image-bytes",
+        }
+        with patch.object(ImageQualityPipeline, "_fetch_html", return_value="<html></html>"), \
+            patch.object(ImageQualityPipeline, "_extract_candidates", return_value=[ImageCandidate("https://x/a.jpg", "og:image", 1)]), \
+            patch.object(ImageQualityPipeline, "_probe", return_value=static_probe), \
+            patch.object(ImageQualityPipeline, "_vision_assess", return_value={"usable": False, "reason": "vision_low_quality"}), \
+            patch.object(ImageQualityPipeline, "_store_image", return_value="C:\\fake.jpg"):
+            result = self.pipeline.select_best("https://example.com/a", "title")
+
+        self.assertTrue(result.passed)
+        self.assertEqual(result.local_path, "C:\\fake.jpg")
+        self.assertIn("vision_low_quality", result.rejection_reasons)
+
+    def test_static_fallback_is_blocked_when_vision_marks_image_irrelevant(self):
+        static_probe = {
+            "ok": True,
+            "score": 0.82,
+            "width": 1280,
+            "height": 720,
+            "bytes_len": 60000,
+            "content_type": "image/jpeg",
+            "sharpness": 28.0,
+            "relevance": 0.42,
+            "bytes": b"fake-image-bytes",
+        }
+        with patch.object(ImageQualityPipeline, "_fetch_html", return_value="<html></html>"), \
+            patch.object(ImageQualityPipeline, "_extract_candidates", return_value=[ImageCandidate("https://x/a.jpg", "og:image", 1)]), \
+            patch.object(ImageQualityPipeline, "_probe", return_value=static_probe), \
+            patch.object(ImageQualityPipeline, "_vision_assess", return_value={"usable": False, "reason": "vision_irrelevant"}), \
+            patch.object(ImageQualityPipeline, "_store_image", return_value="C:\\fake.jpg"):
+            result = self.pipeline.select_best("https://example.com/a", "Damaged aircraft at Saudi base")
+
+        self.assertFalse(result.passed)
+        self.assertTrue(result.needs_image)
+        self.assertIn("vision_irrelevant", result.rejection_reasons)
+
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
 
 
 

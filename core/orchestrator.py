@@ -1,4 +1,4 @@
-﻿"""Multi-agent orchestrator with event resolution, category intelligence and image quality checks."""
+"""Multi-agent orchestrator with event resolution, category intelligence and image quality checks."""
 
 from __future__ import annotations
 
@@ -32,6 +32,41 @@ STOPWORDS = {
     "have", "has", "been", "about", "under", "into", "more", "than", "what", "when", "where", "which", "india",
 }
 
+PRIORITY_KEYWORD_GROUPS: Dict[str, List[str]] = {
+    "international": [
+        "us", "usa", "white house", "narendra modi", "donald trump", "elon musk", "bill gates",
+        "satya nadella", "sundar pichai", "obama", "rishi sunak", "dubai", "saudi", "gulf", "gcc",
+        "singapore", "thailand", "russia", "eu", "nato", "un", "brics", "g7", "israel",
+        "jai shankar", "jaishankar", "oscars",
+    ],
+    "national": [
+        "narendra modi", "modi", "pm modi", "amit shah", "nithin gadkari", "arvind kejriwal", "rajnath",
+        "minister", "cabinet", "parliament", "speaker", "lop", "rajyasabha", "rajya sabha",
+        "supreme court", "cec", "ec", "election commission", "bollywood", "rahul gandhi", "kharge",
+        "sonia gandhi", "bjp", "congress", "aap", "shiv sena", "rjd", "rss", "brs", "tdp", "ysrcp",
+        "dmk", "aiadmk", "chandra babu", "naidu", "jagan", "vijay", "stalin", "mgr",
+    ],
+    "sports": [
+        "cricket", "football", "tennis", "world cup", "ipl", "f1", "champions league", "fifa",
+        "olympics", "wimbeldon", "wimbledon", "gambhir", "dhoni", "virat", "hardik", "suryakumar",
+        "rohit", "bumrah", "gill", "sachin", "india", "pakistan", "england", "australia",
+        "south africa", "new zealand",
+    ],
+    "technology": [
+        "apple", "samsung", "xiaomi", "oppo", "vivo", "one plus", "nothing", "amazon", "flipkart",
+        "myntra", "ajio", "whatsapp", "ai", "google",
+    ],
+    "business": [
+        "nasa", "isro", "rbi", "cag", "nifty", "sensex", "bse", "nse", "results", "startup",
+        "real estate", "banks", "gold", "silver", "pe", "vc", "fund", "ambani", "reliance",
+        "adani", "mittal", "birla",
+    ],
+    "general": [
+        "bollywood", "tollywood", "tamil", "kannada", "hollywood", "netflix", "amazon", "jio", "sony",
+        "oscar", "filmfare", "review", "rating", "controversy", "trailer", "date", "exercise",
+        "fitness", "tips", "obesity", "brain", "adulteration", "hospitals", "diagnostics", "preventive",
+    ],
+}
 
 class HardenedOrchestrator:
     def __init__(self):
@@ -48,6 +83,8 @@ class HardenedOrchestrator:
         self.ingestion = MultiAgentIngestion(
             category_sources=self.settings.category_sources,
             max_links_per_source=self.settings.max_links_per_source,
+            max_article_age_minutes=self.settings.max_article_age_minutes,
+            require_published_time=self.settings.require_published_time,
         )
         self.resolver = EventResolver(
             title_similarity=self.settings.resolver_title_similarity,
@@ -119,6 +156,8 @@ class HardenedOrchestrator:
         metrics.record_category_counts(by_category)
         for cat, count in metrics.total_scraped_per_category.items():
             self.logger.info(f"metric.scraped category={cat} count={count}")
+        active_category_count = sum(1 for rows in by_category.values() if rows)
+        self.logger.info(f"metric.active_categories count={active_category_count}")
 
         all_articles = [item for rows in by_category.values() for item in rows]
         clusters = self.resolver.cluster(all_articles)
@@ -144,11 +183,17 @@ class HardenedOrchestrator:
         published = 0
         consecutive_publish_failures = 0
         stop_run = False
+        published_story_keys: set[str] = set()
 
         for step in self.publish_plan:
             category = str(step["category"])
             total_target = int(step["total"])
             breaking_target = int(step["breaking_target"])
+            total_target, breaking_target = self._effective_publish_targets(
+                total_target,
+                breaking_target,
+                active_category_count,
+            )
 
             category_rows = clusters_by_category.get(category, [])
             if not category_rows:
@@ -162,19 +207,21 @@ class HardenedOrchestrator:
 
             breaking_pool.sort(
                 key=lambda row: (
+                    self._cluster_priority_score(row[0], category),
                     float(getattr(row[1], "confidence", 0.0)),
                     getattr(row[0], "end_time", datetime.min.replace(tzinfo=timezone.utc)),
+                    -self._cluster_source_rank(row[0]),
                 ),
                 reverse=True,
             )
             normal_pool.sort(
-                key=lambda row: getattr(row[0], "end_time", datetime.min.replace(tzinfo=timezone.utc)),
+                key=lambda row: (
+                    self._cluster_priority_score(row[0], category),
+                    getattr(row[0], "end_time", datetime.min.replace(tzinfo=timezone.utc)),
+                    -self._cluster_source_rank(row[0]),
+                ),
                 reverse=True,
             )
-            # Prefer sources with better image hit-rate before BBC-heavy picks.
-            breaking_pool.sort(key=lambda row: self._cluster_source_rank(row[0]))
-            normal_pool.sort(key=lambda row: self._cluster_source_rank(row[0]))
-
             cat_published = 0
             cat_breaking_published = 0
 
@@ -201,9 +248,21 @@ class HardenedOrchestrator:
                 if selected is None:
                     break
                 cluster, decision = selected
+                cluster_story_key = self._cluster_story_key(cluster)
+                if self._story_already_published(cluster_story_key, published_story_keys):
+                    self.logger.info(
+                        f"skip.duplicate_story story_key={cluster_story_key} title={getattr(cluster, 'canonical_title', '')}"
+                    )
+                    continue
                 cluster_source = self._cluster_primary_source(cluster)
                 cluster_articles = list(getattr(cluster, "articles", []) or [])
-                cluster_articles.sort(key=lambda a: len(getattr(a, "body", "") or ""), reverse=True)
+                cluster_articles.sort(
+                    key=lambda a: (
+                        self._article_priority_score(a, category),
+                        len(getattr(a, "body", "") or ""),
+                    ),
+                    reverse=True,
+                )
                 if not cluster_articles:
                     article = self._pick_representative(getattr(cluster, "articles", []))
                     if article:
@@ -231,6 +290,9 @@ class HardenedOrchestrator:
                     if self._is_article_too_old(getattr(article, "published_time", None)):
                         self.memory.mark_failed(article_url, "article_too_old")
                         continue
+                    if self._is_low_signal_story(article, category, selected_is_breaking):
+                        self.logger.info(f"skip.low_signal url={article_url} category={category}")
+                        continue
 
                     ok, fail_reason = await self._publish_article(article, selected_is_breaking, metrics)
                     if ok:
@@ -240,6 +302,13 @@ class HardenedOrchestrator:
                             cat_breaking_published += 1
                         consecutive_publish_failures = 0
                         self.memory.mark_success(article_url)
+                        if cluster_story_key:
+                            published_story_keys.add(cluster_story_key)
+                            self.memory.mark_story_success(
+                                cluster_story_key,
+                                article_url,
+                                getattr(cluster, "canonical_title", ""),
+                            )
                         published_from_cluster = True
                         break
 
@@ -279,11 +348,77 @@ class HardenedOrchestrator:
     def _pick_representative(self, articles: List[object]):
         return max(articles, key=lambda a: len(getattr(a, "body", "") or ""), default=None)
 
+    def _effective_publish_targets(self, total_target: int, breaking_target: int, active_category_count: int) -> Tuple[int, int]:
+        if active_category_count <= 0:
+            return total_target, breaking_target
+        if active_category_count == 1:
+            total_target = min(total_target, 2)
+        elif active_category_count == 2:
+            total_target = min(total_target, 3)
+
+        breaking_target = max(0, min(breaking_target, total_target))
+        if active_category_count <= 2:
+            breaking_target = min(breaking_target, 1)
+        return total_target, breaking_target
+
+    def _priority_keyword_score(self, text: str, category: str) -> int:
+        low = f" {(text or '').lower()} "
+        score = 0
+        for keyword in PRIORITY_KEYWORD_GROUPS.get("general", []):
+            if self._has_priority_keyword(low, keyword):
+                score += 1
+        category_bucket = "technology" if category == "tech" else category
+        for keyword in PRIORITY_KEYWORD_GROUPS.get(category_bucket, []):
+            if self._has_priority_keyword(low, keyword):
+                score += 3
+        return score
+
+    def _has_priority_keyword(self, low_text: str, keyword: str) -> bool:
+        token = (keyword or "").strip().lower()
+        if not token:
+            return False
+        if " " in token:
+            return token in low_text
+        return re.search(rf"\b{re.escape(token)}\b", low_text) is not None
+
+    def _article_priority_score(self, article: object, category: str) -> int:
+        text = " ".join(
+            str(value or "")
+            for value in (
+                getattr(article, "title", ""),
+                getattr(article, "body", ""),
+                getattr(article, "url", ""),
+            )
+        )
+        return self._priority_keyword_score(text, category)
+
+    def _cluster_priority_score(self, cluster: object, category: str) -> int:
+        articles = list(getattr(cluster, "articles", []) or [])
+        if not articles:
+            return 0
+        return max(self._article_priority_score(article, category) for article in articles)
+
     def _cluster_primary_source(self, cluster: object) -> str:
         articles = list(getattr(cluster, "articles", []) or [])
         if not articles:
             return ""
         return str(getattr(articles[0], "source", "") or "").strip().lower()
+
+    def _cluster_story_key(self, cluster: object) -> str:
+        story_key = str(getattr(cluster, "story_key", "") or "").strip()
+        if story_key:
+            return story_key
+        title = str(getattr(cluster, "canonical_title", "") or "").strip()
+        return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+
+    def _story_already_published(self, story_key: str, published_story_keys: set[str]) -> bool:
+        key = (story_key or "").strip()
+        if not key:
+            return False
+        if key in published_story_keys:
+            return True
+        dedupe_hours = int(getattr(self.settings, "story_dedupe_hours", 48))
+        return bool(self.memory.is_story_success(key, within_hours=dedupe_hours))
 
     def _pop_with_source_backoff(
         self,
@@ -304,6 +439,7 @@ class HardenedOrchestrator:
                 best_idx = idx
 
         return pool.pop(best_idx)
+
     def _cluster_source_rank(self, cluster: object) -> int:
         articles = list(getattr(cluster, "articles", []) or [])
         if not articles:
@@ -321,31 +457,75 @@ class HardenedOrchestrator:
 
     def _is_article_too_old(self, published_time_str: Optional[str]) -> bool:
         if not published_time_str:
-            return False
+            return bool(self.settings.require_published_time)
         try:
             dt = datetime.fromisoformat(published_time_str.replace("Z", "+00:00"))
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
             age = datetime.now(timezone.utc) - dt.astimezone(timezone.utc)
-            return age > timedelta(hours=self.settings.max_article_age_hours)
+            return age > timedelta(minutes=self.settings.max_article_age_minutes)
         except Exception:
+            return bool(self.settings.require_published_time)
+
+    def _is_low_signal_story(self, article, category: str, want_breaking: bool) -> bool:
+        if not want_breaking:
             return False
+
+        title = str(getattr(article, "title", "") or "").lower()
+        url = str(getattr(article, "url", "") or "").lower()
+        text = f" {title} {url} "
+
+        soft_patterns = (
+            "holiday",
+            "free entry",
+            "best timings",
+            "miracle garden",
+            "shock you",
+            "will shock you",
+            "in photos",
+            "watch:",
+            "offers free",
+            "how to",
+            "review",
+        )
+        if any(pattern in text for pattern in soft_patterns):
+            return True
+
+        if category == "international" and any(pattern in text for pattern in ("eid", "tourist", "garden", "weekend", "break confirmed")):
+            return True
+
+        return False
 
     def _decide_cms_category(self, article, title: str, body: str) -> str:
         hint = str(getattr(article, "category", "")).lower().strip()
         fallback = PIPELINE_TO_CMS_CATEGORY.get(hint, "National")
         source_low = str(getattr(article, "source", "")).lower()
+        source_url_low = str(getattr(article, "source_url", "")).lower()
         url_low = str(getattr(article, "url", "")).lower()
         text = f" {title} {body} ".lower()
 
-        source_is_india = any(token in source_low for token in ("toi", "times of india", "the hindu"))
+        source_is_india = any(
+            token in source_low
+            for token in ("toi", "times of india", "the hindu", "ndtv", "india today", "hindustan times", "indian express")
+        )
+        source_has_world_section = any(
+            marker in source_url_low or marker in url_low
+            for marker in ("/world", "/middle-east/", "/rest-of-world/", "/us/", "/europe/", "/asia/", "/africa/")
+        )
         url_has_india_news = ("/india/" in url_low) or ("/news/national/" in url_low)
-        india_context = source_is_india or url_has_india_news or any(
+        explicit_india_context = url_has_india_news or any(
             marker in text
             for marker in (
                 " india ", " indian ", "new delhi", "delhi", "mumbai", "bengaluru", "kolkata", "chennai",
                 "hyderabad", "rajya sabha", "lok sabha", "andhra pradesh", "telangana",
             )
+        )
+        india_context = explicit_india_context or (source_is_india and not source_has_world_section)
+        telangana_signal = any(
+            marker in text for marker in ("telangana", "hyderabad", "secunderabad", "warangal", "khammam", "nizamabad")
+        )
+        andhra_signal = any(
+            marker in text for marker in ("andhra pradesh", "amaravati", "visakhapatnam", "vijayawada", "tirupati", "guntur")
         )
 
         env_signal = any(
@@ -376,6 +556,13 @@ class HardenedOrchestrator:
             return "Environment"
         if hint == "tech" and tech_signal:
             return "Technology"
+        if telangana_signal:
+            return "Telangana"
+        if andhra_signal:
+            return "Andhra Pradesh"
+
+        if hint == "international" and source_has_world_section and not explicit_india_context:
+            return "International"
 
         # Keep international pipeline items in International unless they came from India-specific sources/urls.
         if hint == "international" and not india_context:
@@ -386,18 +573,12 @@ class HardenedOrchestrator:
                 return "National"
             return decided
 
-        # For non-India context, avoid National/State leakage.
-        if decided in {"National", "State", "Telangana", "Andhra Pradesh"}:
+        if not india_context:
             if env_signal:
                 return "Environment"
             if tech_signal:
                 return "Technology"
             return "International"
-
-        if env_signal and decided in {"International", "Lifestyle"}:
-            return "Environment"
-        if tech_signal and decided in {"Politics", "International", "National"}:
-            return "Technology"
 
         return decided
     def _build_hashtags(self, category: str, title: str, is_breaking: bool) -> str:
@@ -431,19 +612,40 @@ class HardenedOrchestrator:
         hashtag = " ".join(deduped)
         return hashtag[:120]
 
+    def _image_query_terms(self, article, summary_title: str) -> List[str]:
+        blob = " ".join(
+            value
+            for value in (
+                summary_title or "",
+                getattr(article, "title", "") or "",
+                (getattr(article, "body", "") or "")[:320],
+            )
+            if value
+        ).lower()
+        terms: List[str] = []
+        blocked = STOPWORDS | {"photo", "photos", "image", "images", "video", "report", "reports", "story"}
+        for token in re.findall(r"[a-z0-9]{4,}", blob):
+            if token in blocked:
+                continue
+            if token not in terms:
+                terms.append(token)
+            if len(terms) >= 5:
+                break
+        return terms
+
     def _build_image_query(self, article, summary_title: str, category: str) -> str:
-        source = str(getattr(article, "source", "")).strip()
         title = (summary_title or getattr(article, "title", "") or "").strip()
-        if source and title:
-            return f"{title} {source} news photo"
+        terms = self._image_query_terms(article, title)
+        if terms:
+            return f"{' '.join(terms)} {category.lower()} news photo"
         if title:
             return f"{title} news photo"
         return f"{category} breaking news photo"
 
     def _select_fallback_image_url(self, article) -> Optional[str]:
         source_low = str(getattr(article, "source", "") or "").lower()
-        if any(token in source_low for token in ("bbc", "ndtv", "india today")):
-            # These sources often expose branded, blocked, or low-quality CDN assets in fallback mode.
+        if "ndtv" in source_low:
+            # NDTV image URLs frequently return 403s in API mode, so avoid wasting publish attempts on them.
             return None
 
         for raw in [getattr(article, "main_image", ""), getattr(article, "og_image", "")]:
@@ -471,13 +673,16 @@ class HardenedOrchestrator:
             return url
         return None
     async def _publish_article(self, article, is_breaking: bool, metrics: PipelineMetrics) -> Tuple[bool, str]:
-        summary = self.summarizer.summarize(article.title, article.body)
+        summary = self.summarizer.summarize(article.title, article.body, max_retries=(2 if is_breaking else 3))
         if not summary:
             return False, "summary_failed"
 
-        telugu = self.telugu_writer.write(summary["title"], summary["body"])
+        telugu = self.telugu_writer.write(summary["title"], summary["body"], max_retries=1)
         if not telugu:
             return False, "telugu_failed"
+
+        category = self._decide_cms_category(article, summary["title"], summary["body"])
+        image_search_query = self._build_image_query(article, summary["title"], category)
 
         image_result = self.image_pipeline.select_best(
             article_url=article.url,
@@ -501,15 +706,19 @@ class HardenedOrchestrator:
                 self.logger.warning(
                     f"Image quality pipeline returned no file; using source image URL fallback. url={article.url}"
                 )
+            elif image_search_query:
+                self.logger.warning(
+                    "Image quality pipeline returned no direct asset; proceeding with image search fallback. "
+                    f"url={article.url} reasons={image_result.rejection_reasons}"
+                )
             else:
                 self.logger.warning(
-                    f"Skipping publish because no usable image path/url is available. url={article.url}"
+                    "Skipping publish because no usable image path/url is available and no search fallback exists. "
+                    f"url={article.url} reasons={image_result.rejection_reasons}"
                 )
                 return False, "image_missing"
 
-        category = self._decide_cms_category(article, summary["title"], summary["body"])
         hashtag = self._build_hashtags(category=category, title=summary["title"], is_breaking=is_breaking)
-        image_search_query = self._build_image_query(article, summary["title"], category)
         self.logger.info(f"publish.meta category={category} hashtag={hashtag}")
 
         validation = self.validator.validate(
@@ -548,6 +757,12 @@ class HardenedOrchestrator:
         if workflow_ok:
             return True, ""
         return False, "workflow_failed"
+
+    async def _recover_browser_session(self) -> bool:
+        if not await self.publisher.ensure_live_page():
+            return False
+        return await self.publisher.login()
+
     async def _safe_login(self) -> bool:
         for attempt in range(self.max_login_retries):
             try:
@@ -561,15 +776,15 @@ class HardenedOrchestrator:
 
     async def _execute_browser_workflow(self, data: ArticleData, url: str) -> bool:
         if not await self.publisher.create_article():
-            if self.publisher.page:
-                await self.publisher.page.reload()
+            if not await self._recover_browser_session():
+                return False
             await asyncio.sleep(2)
             if not await self.publisher.create_article():
                 return False
 
         if not await self.publisher.fill_form(data):
-            if self.publisher.page:
-                await self.publisher.page.reload()
+            if not await self._recover_browser_session():
+                return False
             await asyncio.sleep(2)
             return False
 
@@ -577,10 +792,26 @@ class HardenedOrchestrator:
             if await self.publisher.publish():
                 return True
             await asyncio.sleep(2)
+            if self.publisher.page is None or self.publisher.page.is_closed():
+                if not await self._recover_browser_session():
+                    return False
         return False
 
 
 Orchestrator = HardenedOrchestrator
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

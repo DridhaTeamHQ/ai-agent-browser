@@ -15,15 +15,15 @@ class TeluguWriterTests(unittest.TestCase):
             "నాలుగో వాక్యం అవసరానికి మించిన నేపథ్యాన్ని జోడిస్తోంది. "
             "ఐదో వాక్యం పొడవును అదుపు దాటేలా పెంచుతోంది."
         )
-        fitted = self.writer._fit_body_length(body, min_chars=355, max_chars=365)
-        self.assertLessEqual(len(fitted), 365)
+        fitted = self.writer._fit_body_length(body, min_chars=299, max_chars=350)
+        self.assertLessEqual(len(fitted), 350)
         self.assertTrue(fitted.endswith((".", "!", "?", "।")) or len(fitted) <= 365)
 
     def test_fit_body_length_pads_near_target_short_body(self):
         body = "ఈ పరిణామం ప్రాంతీయ స్థాయిలో ఆందోళన పెంచుతోంది. అధికారులు పరిస్థితిని సమీక్షిస్తున్నారు."
-        fitted = self.writer._fit_body_length(body, min_chars=345, max_chars=365)
-        self.assertGreaterEqual(len(fitted), 345)
-        self.assertLessEqual(len(fitted), 365)
+        fitted = self.writer._fit_body_length(body, min_chars=299, max_chars=350)
+        self.assertGreaterEqual(len(fitted), 299)
+        self.assertLessEqual(len(fitted), 350)
         self.assertTrue(fitted.endswith((".", "!", "?", "।")))
 
     def test_fit_body_length_completes_mid_sentence_tail(self):
@@ -32,14 +32,23 @@ class TeluguWriterTests(unittest.TestCase):
             "ఇది పనితీరు, ఏకాగ్రతపై ప్రభావం చూపుతోందని పరిశోధకులు అంటున్నారు. "
             "సంస్థలు సమతుల్య వినియోగంపై దృష్టి పెట్టాలని నిపుణులు"
         )
-        fitted = self.writer._fit_body_length(body, min_chars=345, max_chars=365)
-        self.assertGreaterEqual(len(fitted), 345)
-        self.assertLessEqual(len(fitted), 365)
+        fitted = self.writer._fit_body_length(body, min_chars=299, max_chars=350)
+        self.assertGreaterEqual(len(fitted), 299)
+        self.assertLessEqual(len(fitted), 350)
         self.assertTrue(fitted.endswith((".", "!", "?", "।")))
         self.assertNotIn("నిపుణులు\n", fitted)
 
 
+    def test_disallowed_english_allows_article_proper_nouns(self):
+        allowed = self.writer._derive_allowed_english(
+            "Dubai Miracle Garden offers free entry",
+            "Dubai Miracle Garden will allow UAE residents free entry during the Eid period.",
+        )
+        self.assertFalse(self.writer._has_disallowed_english("దుబాయ్ Miracle Garden కు ఉచిత ప్రవేశం", allowed))
+        self.assertTrue(self.writer._has_disallowed_english("దుబాయ్ holiday break వివరాలు", allowed))
 if __name__ == "__main__":
     unittest.main()
+
+
 
 

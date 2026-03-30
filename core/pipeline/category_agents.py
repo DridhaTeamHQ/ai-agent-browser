@@ -2,6 +2,7 @@
 
 import re
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from utils.logger import get_logger
@@ -13,6 +14,7 @@ from core.sources.indiatoday import IndiaTodayScraper
 from core.sources.bbc import BBCScraper
 from core.sources.reuters import ReutersScraper
 from core.sources.aljazeera import AlJazeeraScraper
+from core.sources.thehindu import TheHinduScraper
 
 
 SCRAPER_REGISTRY: Dict[str, Callable[[], Any]] = {
@@ -22,6 +24,7 @@ SCRAPER_REGISTRY: Dict[str, Callable[[], Any]] = {
     "bbc": BBCScraper,
     "reuters": ReutersScraper,
     "aljazeera": AlJazeeraScraper,
+    "thehindu": TheHinduScraper,
 }
 
 CATEGORY_KEYWORDS: Dict[CategoryName, List[str]] = {
@@ -98,15 +101,38 @@ class CategoryAgent:
         sources: List[SourceConfig],
         max_links_per_source: int = 8,
         shared_cache: Optional[Dict[str, List[Dict[str, object]]]] = None,
+        max_article_age_minutes: int = 30,
+        require_published_time: bool = True,
     ):
         self.category = category
         self.sources = sources
         self.max_links_per_source = max_links_per_source
         self.shared_cache = shared_cache
+        self.max_article_age_minutes = max_article_age_minutes
+        self.require_published_time = require_published_time
         self.logger = get_logger(f"agent_{category}")
+
+    def _parse_published_time(self, published_time: Optional[str]) -> Optional[datetime]:
+        if not published_time:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(published_time).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        except Exception:
+            return None
+
+    def _is_fresh_article(self, article: IngestedArticle) -> bool:
+        published_dt = self._parse_published_time(article.published_time)
+        if published_dt is None:
+            return not self.require_published_time
+        age = datetime.now(timezone.utc) - published_dt
+        return age <= timedelta(minutes=self.max_article_age_minutes)
 
     def run(self) -> List[IngestedArticle]:
         collected: List[IngestedArticle] = []
+        skipped_stale = 0
         for source in self.sources:
             scraper_factory = SCRAPER_REGISTRY.get(source.scraper)
             if not scraper_factory:
@@ -126,10 +152,15 @@ class CategoryAgent:
                     og_image=row.get("og_image"),
                     main_image=row.get("main_image"),
                 )
+                if not self._is_fresh_article(ingested):
+                    skipped_stale += 1
+                    continue
                 if self._matches_category(ingested):
                     collected.append(ingested)
 
-        self.logger.info(f"Category {self.category}: scraped {len(collected)} articles")
+        self.logger.info(
+            f"Category {self.category}: scraped {len(collected)} fresh articles, skipped_stale={skipped_stale}"
+        )
         return collected
 
     def _fetch_source_rows(self, source: SourceConfig, scraper_factory: Callable[[], Any]) -> List[Dict[str, object]]:
@@ -200,7 +231,9 @@ class CategoryAgent:
         source_url_low = str(article.source_url or "").lower()
 
         is_international_source = _is_international_source(source_low)
-        is_india_source = any(token in source_low for token in ("toi", "times of india", "ndtv", "india today"))
+        is_india_source = any(
+            token in source_low for token in ("toi", "times of india", "ndtv", "india today", "the hindu")
+        )
         has_india_marker = any(marker in text for marker in INDIA_MARKERS)
         is_local_politics = _is_local_india_politics(text)
         is_international_theme = self._is_international_theme(text)
@@ -259,10 +292,18 @@ class CategoryAgent:
 
 
 class MultiAgentIngestion:
-    def __init__(self, category_sources: Dict[CategoryName, List[Dict[str, str]]], max_links_per_source: int = 8):
+    def __init__(
+        self,
+        category_sources: Dict[CategoryName, List[Dict[str, str]]],
+        max_links_per_source: int = 8,
+        max_article_age_minutes: int = 30,
+        require_published_time: bool = True,
+    ):
         self.logger = get_logger("multi_agent_ingestion")
         self.category_sources = category_sources
         self.max_links_per_source = max_links_per_source
+        self.max_article_age_minutes = max_article_age_minutes
+        self.require_published_time = require_published_time
 
     def run(self) -> Dict[CategoryName, List[IngestedArticle]]:
         by_category: Dict[CategoryName, List[IngestedArticle]] = {}
@@ -275,6 +316,8 @@ class MultiAgentIngestion:
                 sources=sources,
                 max_links_per_source=self.max_links_per_source,
                 shared_cache=shared_cache,
+                max_article_age_minutes=self.max_article_age_minutes,
+                require_published_time=self.require_published_time,
             )
             by_category[category] = agent.run()
 

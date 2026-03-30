@@ -83,6 +83,29 @@ class CMSPublisher:
         except Exception as exc:
             self.logger.warning(f"Error stopping browser: {exc}")
 
+    async def ensure_live_page(self) -> bool:
+        try:
+            if self.playwright is None:
+                self.playwright = await async_playwright().start()
+            if self.browser is None or not self.browser.is_connected():
+                self.browser = await self.playwright.chromium.launch(headless=False, slow_mo=200)
+
+            recreate_context = self.context is None or self.page is None or self.page.is_closed()
+            if recreate_context:
+                try:
+                    if self.context:
+                        await self.context.close()
+                except Exception:
+                    pass
+                self.context = await self.browser.new_context(viewport={"width": 1400, "height": 900})
+                self.page = await self.context.new_page()
+                self.page.set_default_timeout(self.TIMEOUT)
+                self.image_finder = GoogleImageFinder(self.page)
+                self.logged_in = False
+            return True
+        except Exception as exc:
+            self.logger.error(f"Browser recovery failed: {exc}")
+            return False
     async def _wait_stable(self):
         if self.page is None:
             return
@@ -202,7 +225,7 @@ class CMSPublisher:
             return False
 
     async def login(self) -> bool:
-        if self.page is None:
+        if not await self.ensure_live_page():
             return False
 
         try:
@@ -287,7 +310,7 @@ class CMSPublisher:
         return False
 
     async def create_article(self) -> bool:
-        if self.page is None:
+        if not await self.ensure_live_page():
             return False
 
         if await self._is_article_form_open():
@@ -343,9 +366,14 @@ class CMSPublisher:
                     return True
 
             await self._dump_debug(f"create_article_attempt_{attempt + 1}")
-            if self.page:
-                await self.page.reload(wait_until="domcontentloaded")
-                await asyncio.sleep(1)
+            if self.page and not self.page.is_closed():
+                try:
+                    await self.page.reload(wait_until="domcontentloaded")
+                    await asyncio.sleep(1)
+                except Exception as exc:
+                    self.logger.warning(f"Create article reload failed: {exc}")
+            elif not await self.ensure_live_page():
+                return False
 
         self.logger.error("Navigation error: unable to reach Create Article form")
         return False
@@ -581,7 +609,7 @@ class CMSPublisher:
             return False
 
     async def fill_form(self, data: ArticleData) -> bool:
-        if self.page is None:
+        if not await self.ensure_live_page():
             return False
 
         try:
@@ -611,6 +639,14 @@ class CMSPublisher:
                 self.logger.info("Image path missing, trying article image URL fallback")
                 image_path = await self._download_article_image(data.image_url, data.english_title)
 
+            if (
+                (not image_path or not os.path.exists(image_path))
+                and data.image_search_query
+                and self.image_finder is not None
+            ):
+                self.logger.info(f"Image path missing, trying search fallback: {data.image_search_query}")
+                image_path = await self.image_finder.find_and_download(data.image_search_query)
+
             if not image_path or not os.path.exists(image_path):
                 self.logger.warning("Image path missing while filling form")
                 return False
@@ -624,33 +660,202 @@ class CMSPublisher:
             self.logger.error(f"Form error: {exc}")
             await self._dump_debug("form_fill_error")
             return False
+
+    @staticmethod
+    def _publish_candidate_rank(meta: Dict[str, Any]) -> int:
+        text = re.sub(r"\s+", " ", str(meta.get("text", ""))).strip().lower()
+        if not text or not re.search(r"publish|submit|save", text):
+            return -1
+
+        role = str(meta.get("role", "")).strip().lower()
+        control_type = str(meta.get("type", "")).strip().lower()
+        aria_has_popup = str(meta.get("aria_has_popup", "")).strip().lower()
+        nearby_text = re.sub(r"\s+", " ", str(meta.get("ancestor_text", ""))).strip().lower()
+
+        if meta.get("is_disabled") or meta.get("is_listbox_item"):
+            return -1
+        if role == "combobox" or aria_has_popup == "listbox":
+            return -1
+
+        score = 0
+        if "publish article" in text:
+            score += 120
+        elif text == "publish":
+            score += 50
+        elif "publish" in text:
+            score += 40
+        elif "submit" in text:
+            score += 25
+        elif "save" in text:
+            score += 10
+
+        if control_type == "submit":
+            score += 30
+        if meta.get("in_form"):
+            score += 15
+        if meta.get("within_dialog"):
+            score += 10
+        if "approval status" in nearby_text and text == "publish":
+            score -= 60
+
+        top = float(meta.get("top") or 0)
+        left = float(meta.get("left") or 0)
+        bottom = float(meta.get("bottom") or 0)
+        viewport_height = float(meta.get("viewport_height") or 0)
+        viewport_width = float(meta.get("viewport_width") or 0)
+
+        if viewport_height and top > viewport_height * 0.55:
+            score += 25
+        if viewport_height and bottom > viewport_height * 0.85:
+            score += 10
+        if viewport_width and left > viewport_width * 0.45:
+            score += 10
+
+        return score
+
+    async def _dismiss_transient_overlays(self):
+        if self.page is None:
+            return
+
+        overlay_selectors = [
+            "[role='listbox']",
+            "[role='menu']",
+            "[data-radix-popper-content-wrapper]",
+        ]
+
+        for _ in range(2):
+            overlay_visible = False
+            for selector in overlay_selectors:
+                try:
+                    loc = self.page.locator(selector).first
+                    if await loc.count() > 0 and await loc.is_visible(timeout=150):
+                        overlay_visible = True
+                        break
+                except Exception:
+                    continue
+
+            if not overlay_visible:
+                return
+
+            try:
+                await self.page.keyboard.press("Escape")
+                await asyncio.sleep(0.25)
+            except Exception:
+                return
+
+    async def _inspect_publish_candidate(self, locator) -> Optional[Dict[str, Any]]:
+        try:
+            if await locator.count() == 0 or not await locator.is_visible(timeout=300):
+                return None
+            meta = await locator.evaluate(
+                """(el) => {
+                    const normalize = (value) => (value || '').replace(/\\s+/g, ' ').trim();
+                    const rect = el.getBoundingClientRect();
+                    const ancestorText = [];
+                    let node = el.parentElement;
+                    for (let depth = 0; depth < 2 && node; depth += 1, node = node.parentElement) {
+                        ancestorText.push(normalize(node.innerText || '').slice(0, 140));
+                    }
+                    return {
+                        text: normalize(el.innerText || el.textContent || el.value || ''),
+                        role: normalize(el.getAttribute('role') || ''),
+                        type: normalize(el.getAttribute('type') || ''),
+                        aria_has_popup: normalize(el.getAttribute('aria-haspopup') || ''),
+                        ancestor_text: ancestorText.join(' '),
+                        within_dialog: !!el.closest('[role="dialog"]'),
+                        in_form: !!el.closest('form'),
+                        is_disabled: !!el.disabled || el.getAttribute('aria-disabled') === 'true',
+                        is_listbox_item: !!el.closest('[role="listbox"], [role="option"], [role="menu"], [data-radix-popper-content-wrapper]'),
+                        top: rect.top,
+                        left: rect.left,
+                        bottom: rect.bottom,
+                        viewport_height: window.innerHeight || 0,
+                        viewport_width: window.innerWidth || 0,
+                    };
+                }"""
+            )
+            if not isinstance(meta, dict):
+                return None
+            return meta
+        except Exception:
+            return None
+
+    async def _pick_best_publish_candidate(self, selector: str, limit: int = 8):
+        if self.page is None:
+            return None
+
+        try:
+            locator = self.page.locator(selector)
+            count = min(await locator.count(), limit)
+        except Exception:
+            return None
+
+        best = None
+        best_meta = None
+        best_score = -1
+
+        for index in range(count):
+            candidate = locator.nth(index)
+            meta = await self._inspect_publish_candidate(candidate)
+            if meta is None:
+                continue
+            score = self._publish_candidate_rank(meta)
+            if score > best_score:
+                best = candidate
+                best_meta = meta
+                best_score = score
+
+        if best is None or best_score < 0:
+            return None
+        return best, best_meta, best_score
+
     async def _find_publish_button(self):
         if self.page is None:
             return None
 
+        await self._dismiss_transient_overlays()
+
         selectors = [
-            "button:has-text('Publish')",
             "button:has-text('Publish Article')",
+            "[role='dialog'] button:has-text('Publish Article')",
+            "button[type='submit']:has-text('Publish Article')",
+            "[data-testid='publish-button']",
+            "[role='dialog'] button[type='submit']",
+            "button[type='submit']:has-text('Publish')",
             "button:has-text('Submit')",
             "button:has-text('Save')",
-            "button[type='submit']:has-text('Publish')",
-            "[data-testid='publish-button']",
+            "button:has-text('Publish')",
         ]
 
-        for sel in selectors:
-            try:
-                loc = self.page.locator(sel).first
-                if await loc.count() > 0 and await loc.is_visible(timeout=800):
-                    return loc
-            except Exception:
-                continue
+        best = None
+        best_meta = None
+        best_score = -1
 
-        try:
-            role_button = self.page.get_by_role("button", name=re.compile(r"publish|submit|save", re.I)).first
-            if await role_button.count() > 0 and await role_button.is_visible(timeout=800):
-                return role_button
-        except Exception:
-            pass
+        for sel in selectors:
+            result = await self._pick_best_publish_candidate(sel)
+            if result is None:
+                continue
+            candidate, meta, score = result
+            if score > best_score:
+                best = candidate
+                best_meta = meta
+                best_score = score
+
+        generic = await self._pick_best_publish_candidate("button, [role='button'], input[type='submit']", limit=40)
+        if generic is not None:
+            candidate, meta, score = generic
+            if score > best_score:
+                best = candidate
+                best_meta = meta
+                best_score = score
+
+        if best is not None and best_meta is not None:
+            self.logger.info(
+                "Publish target chosen: text=%r score=%s",
+                best_meta.get("text", ""),
+                best_score,
+            )
+            return best
 
         return None
 
@@ -672,7 +877,7 @@ class CMSPublisher:
         return False
 
     async def publish(self) -> bool:
-        if self.page is None:
+        if not await self.ensure_live_page():
             return False
 
         try:
@@ -709,6 +914,9 @@ class CMSPublisher:
 
     async def verify_publish(self) -> bool:
         return await self._wait_publish_success()
+
+
+
 
 
 
