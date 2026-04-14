@@ -1,15 +1,16 @@
-"""Multi-agent orchestrator with event resolution, category intelligence and image quality checks."""
+"""Single-flow orchestrator with event resolution, category intelligence and image quality checks."""
 
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from config.settings import get_settings
 from core.cms import ArticleData, CMSPublisher
-from core.intelligence import CategoryDecider, Summarizer, TeluguWriter
+from core.intelligence import CategoryDecider, Summarizer
 from core.media import ImageQualityPipeline
 from core.memory import AgentMemory
 from core.pipeline import BreakingNewsClassifier, EventResolver, MultiAgentIngestion, PipelineMetrics
@@ -75,7 +76,6 @@ class HardenedOrchestrator:
 
         self.publisher = CMSPublisher()
         self.summarizer = Summarizer()
-        self.telugu_writer = TeluguWriter()
         self.category_decider = CategoryDecider()
         self.validator = ArticleValidator()
         self.memory = AgentMemory()
@@ -582,9 +582,14 @@ class HardenedOrchestrator:
 
         return decided
     def _build_hashtags(self, category: str, title: str, is_breaking: bool) -> str:
-        tags = ["#breaking", "#news"] if is_breaking else ["#news", "#trending"]
+        category_low = category.strip().lower()
+        tags: List[str] = []
+        if is_breaking and category_low not in {"sports", "entertainment"}:
+            tags.append("#breaking")
+        elif category_low == "sports":
+            tags.append("#trending")
 
-        cat_tag = re.sub(r"\s+", "", category.strip().lower())
+        cat_tag = re.sub(r"\s+", "", category_low)
         if cat_tag:
             tags.append(f"#{cat_tag}")
 
@@ -595,7 +600,7 @@ class HardenedOrchestrator:
                 continue
             if word not in keywords:
                 keywords.append(word)
-            if len(keywords) >= 2:
+            if len(keywords) >= 3:
                 break
 
         for kw in keywords:
@@ -673,13 +678,11 @@ class HardenedOrchestrator:
             return url
         return None
     async def _publish_article(self, article, is_breaking: bool, metrics: PipelineMetrics) -> Tuple[bool, str]:
+        if getattr(article, "category", "") == "sports":
+            is_breaking = False
         summary = self.summarizer.summarize(article.title, article.body, max_retries=(2 if is_breaking else 3))
         if not summary:
             return False, "summary_failed"
-
-        telugu = self.telugu_writer.write(summary["title"], summary["body"], max_retries=1)
-        if not telugu:
-            return False, "telugu_failed"
 
         category = self._decide_cms_category(article, summary["title"], summary["body"])
         image_search_query = self._build_image_query(article, summary["title"], category)
@@ -699,24 +702,13 @@ class HardenedOrchestrator:
             )
             return False, "image_missing"
 
-        if not image_result.local_path and not image_result.selected_url:
-            fallback_url = self._select_fallback_image_url(article)
-            if fallback_url:
-                image_result.selected_url = fallback_url
-                self.logger.warning(
-                    f"Image quality pipeline returned no file; using source image URL fallback. url={article.url}"
-                )
-            elif image_search_query:
-                self.logger.warning(
-                    "Image quality pipeline returned no direct asset; proceeding with image search fallback. "
-                    f"url={article.url} reasons={image_result.rejection_reasons}"
-                )
-            else:
-                self.logger.warning(
-                    "Skipping publish because no usable image path/url is available and no search fallback exists. "
-                    f"url={article.url} reasons={image_result.rejection_reasons}"
-                )
-                return False, "image_missing"
+        # Strict relevance gate: publish only when the image pipeline produced a vetted local image.
+        if not image_result.local_path or not os.path.exists(image_result.local_path):
+            self.logger.warning(
+                "Skipping publish because no vetted local image is available from quality pipeline. "
+                f"url={article.url} reasons={image_result.rejection_reasons}"
+            )
+            return False, "image_missing"
 
         hashtag = self._build_hashtags(category=category, title=summary["title"], is_breaking=is_breaking)
         self.logger.info(f"publish.meta category={category} hashtag={hashtag}")
@@ -724,13 +716,11 @@ class HardenedOrchestrator:
         validation = self.validator.validate(
             english_title=summary["title"],
             english_body=summary["body"],
-            telugu_title=telugu["title"],
-            telugu_body=telugu["body"],
             category=category,
             image_path=image_result.local_path,
             hashtag=hashtag,
-            image_search_query=image_search_query,
-            allow_missing_image=True,
+            image_search_query="",
+            allow_missing_image=False,
         )
         if not validation.is_valid:
             self.logger.warning(f"Validation failed for article: {validation.error_message}")
@@ -739,14 +729,12 @@ class HardenedOrchestrator:
         data = ArticleData(
             english_title=summary["title"],
             english_body=summary["body"],
-            telugu_title=telugu["title"],
-            telugu_body=telugu["body"],
             category=category,
             hashtag=hashtag,
             image_path=image_result.local_path,
-            image_search_query=image_search_query,
+            image_search_query="",
             needs_image=image_result.needs_image,
-            image_url=image_result.selected_url,
+            image_url=None,
             image_metadata={
                 "quality": image_result.metadata,
                 "rejection_reasons": image_result.rejection_reasons,

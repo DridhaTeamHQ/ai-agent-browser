@@ -48,6 +48,38 @@ class ValidatorCategoryTests(unittest.TestCase):
         )
         self.assertFalse(result.is_valid)
         self.assertIn('comma', result.error_message.lower())
+
+    def test_titles_with_exclamation_marks_are_rejected(self):
+        validator = ArticleValidator()
+        result = validator.validate(
+            english_title='Market sinks as panic grows!',
+            english_body='Officials say selling pressure is deepening as global risks continue to rattle investors.',
+            category='Environment',
+            image_path=None,
+            hashtag='#environment',
+            image_search_query='market panic photo',
+        )
+        self.assertFalse(result.is_valid)
+        self.assertIn('exclamation', result.error_message.lower())
+
+    def test_bodies_over_380_chars_are_rejected(self):
+        validator = ArticleValidator()
+        long_body = (
+            "Officials said the Cabinet reviewed the proposal in detail before clearing it for rollout. "
+            "The decision affects multiple departments and will shape implementation over the coming weeks. "
+            "Senior ministers said the move is meant to streamline coordination, reduce delays, and tighten monitoring across agencies. "
+            "The government is expected to issue a detailed note after the next round of meetings."
+        )
+        result = validator.validate(
+            english_title='Cabinet clears rollout framework',
+            english_body=long_body,
+            category='National',
+            image_path=None,
+            hashtag='#national',
+            image_search_query='cabinet meeting photo',
+        )
+        self.assertFalse(result.is_valid)
+        self.assertIn('too long', result.error_message.lower())
 if __name__ == '__main__':
     unittest.main()
 

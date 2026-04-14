@@ -37,13 +37,11 @@ DEFAULT_CATEGORY_SOURCES: Dict[str, List[Dict[str, str]]] = {
         {"name": "Reuters", "scraper": "reuters", "url": "https://www.reuters.com/business/"},
         {"name": "TOI", "scraper": "toi", "url": "https://timesofindia.indiatimes.com/business"},
         {"name": "India Today", "scraper": "indiatoday", "url": "https://www.indiatoday.in/business"},
-        {"name": "BBC", "scraper": "bbc", "url": "https://www.bbc.com/news/business"},
     ],
     "tech": [
         {"name": "Reuters", "scraper": "reuters", "url": "https://www.reuters.com/technology/"},
         {"name": "TOI", "scraper": "toi", "url": "https://timesofindia.indiatimes.com/technology"},
         {"name": "India Today", "scraper": "indiatoday", "url": "https://www.indiatoday.in/technology"},
-        {"name": "BBC", "scraper": "bbc", "url": "https://www.bbc.com/news/technology"},
     ],
     "international": [
         {"name": "Reuters", "scraper": "reuters", "url": "https://www.reuters.com/world/"},
@@ -71,10 +69,7 @@ DEFAULT_CATEGORY_SOURCES: Dict[str, List[Dict[str, str]]] = {
         {"name": "India Today", "scraper": "indiatoday", "url": "https://www.indiatoday.in/india"},
     ],
     "sports": [
-        {"name": "TOI", "scraper": "toi", "url": "https://timesofindia.indiatimes.com/sports"},
         {"name": "NDTV", "scraper": "ndtv", "url": "https://sports.ndtv.com/"},
-        {"name": "India Today", "scraper": "indiatoday", "url": "https://www.indiatoday.in/sports"},
-        {"name": "AlJazeera", "scraper": "aljazeera", "url": "https://www.aljazeera.com/sports/"},
     ],
 }
 
@@ -136,7 +131,7 @@ DEFAULT_CATEGORY_PUBLISH_PLAN: List[Dict[str, Any]] = [
     {"category": "international", "total": 5, "breaking_target": 3},
     {"category": "national", "total": 5, "breaking_target": 3},
     {"category": "business", "total": 5, "breaking_target": 3},
-    {"category": "sports", "total": 5, "breaking_target": 3},
+    {"category": "sports", "total": 5, "breaking_target": 0},
     {"category": "tech", "total": 5, "breaking_target": 3},
     {"category": "environment", "total": 5, "breaking_target": 3},
     {"category": "crime", "total": 5, "breaking_target": 3},
@@ -225,7 +220,7 @@ def get_settings() -> Settings:
         cms_url=os.getenv("CMS_URL", "").strip(),
         cms_email=os.getenv("CMS_EMAIL", "").strip(),
         cms_password=os.getenv("CMS_PASSWORD", "").strip(),
-        cms_role=os.getenv("CMS_ROLE", "State Sub Editor").strip(),
+        cms_role=os.getenv("CMS_ROLE", "Content Writer").strip(),
         source_url=os.getenv("SOURCE_URL", "").strip(),
         gemini_api_key=os.getenv("GEMINI_API_KEY"),
         openai_api_key=os.getenv("OPENAI_API_KEY"),

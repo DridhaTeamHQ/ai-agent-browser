@@ -29,7 +29,7 @@ class OrchestratorFallbackImageTests(unittest.TestCase):
 
 
 class OrchestratorPublishSearchFallbackTests(unittest.IsolatedAsyncioTestCase):
-    async def test_publish_article_proceeds_with_search_fallback_when_image_missing(self):
+    async def test_publish_article_skips_when_vetted_image_missing(self):
         orchestrator = object.__new__(HardenedOrchestrator)
         orchestrator.logger = Mock()
         orchestrator.summarizer = Mock(
@@ -69,12 +69,10 @@ class OrchestratorPublishSearchFallbackTests(unittest.IsolatedAsyncioTestCase):
 
         ok, reason = await HardenedOrchestrator._publish_article(orchestrator, article, False, metrics)
 
-        self.assertTrue(ok)
-        self.assertEqual(reason, "")
-        sent_data = orchestrator._execute_browser_workflow.await_args.args[0]
-        self.assertEqual(sent_data.image_search_query, "spain us military planes photo")
-        self.assertIsNone(sent_data.image_path)
-        self.assertIsNone(sent_data.image_url)
+        self.assertFalse(ok)
+        self.assertEqual(reason, "image_missing")
+        orchestrator._execute_browser_workflow.assert_not_awaited()
+        orchestrator.validator.validate.assert_not_called()
 
 
 if __name__ == "__main__":

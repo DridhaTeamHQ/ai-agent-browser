@@ -1,4 +1,4 @@
-"""English summarizer with newsroom-style hook writing."""
+"""English summarizer for Shortly-style factual short news cards."""
 
 from __future__ import annotations
 
@@ -741,6 +741,9 @@ Headline style patterns (factual, high-click, non-clickbait):
             cleaned_sentences.append(normalized)
 
         while len(cleaned_sentences) > 1 and self._is_weak_ending_sentence(cleaned_sentences[-1], title=source_title):
+            candidate = self._normalize_body_punctuation(" ".join(cleaned_sentences[:-1]))
+            if len(cleaned_sentences) <= 3 or len(candidate) < 220:
+                break
             cleaned_sentences.pop()
 
         out = self._normalize_body_punctuation(" ".join(cleaned_sentences))
@@ -941,6 +944,170 @@ Headline style patterns (factual, high-click, non-clickbait):
 
         return text
 
+    def _strengthen_body_coverage(
+        self,
+        body: str,
+        source_title: str,
+        source_body: str,
+        min_chars: int,
+        target_chars: int,
+        max_chars: int,
+    ) -> str:
+        out = self._normalize_body_punctuation(body)
+        existing = self._split_sentences(out)
+
+        def _near_duplicate_in_base(candidate: str, base: List[str]) -> bool:
+            candidate_norm = self._normalize_body_punctuation(candidate).lower()
+            for sentence in base:
+                existing_norm = self._normalize_body_punctuation(sentence).lower()
+                if candidate_norm == existing_norm:
+                    return True
+                if SequenceMatcher(None, candidate_norm, existing_norm).ratio() >= 0.9:
+                    return True
+            return False
+
+        ranked: List[tuple[int, int, str]] = []
+        for idx, sentence in enumerate(self._split_sentences(source_body)):
+            normalized = self._normalize_body_punctuation(sentence)
+            if len(normalized) < 35:
+                continue
+            if _near_duplicate_in_base(normalized, existing):
+                continue
+
+            low = normalized.lower()
+            score = self._sentence_quality_score(normalized, title=source_title, position=idx)
+            if re.search(r"\b\d+\b", normalized):
+                score += 3
+            if any(token in low for token in self._ACTION_VERBS):
+                score += 2
+            if any(token in low for token in self._CONSEQUENCE_TOKENS):
+                score += 4
+            if any(low.startswith(prefix) for prefix in self._GENERIC_SENTENCE_STARTS):
+                score -= 2
+            ranked.append((score, idx, normalized))
+
+        for _, _, candidate in sorted(ranked, key=lambda item: (-item[0], item[1])):
+            proposal = f"{out} {candidate}".strip() if out else candidate
+            if len(proposal) > max_chars:
+                continue
+            out = proposal
+            existing.append(candidate)
+            if len(existing) >= 3 and len(out) >= min(min_chars, max(220, target_chars - 40)):
+                break
+
+        if existing:
+            source_positions = {
+                self._normalize_body_punctuation(sentence): idx
+                for idx, sentence in enumerate(self._split_sentences(source_body))
+            }
+
+            title_like = sorted(
+                [
+                    sentence
+                    for sentence in existing
+                    if self._title_overlap(sentence, source_title) >= 4
+                ],
+                key=lambda sentence: -self._title_overlap(sentence, source_title),
+            )
+            for removable in title_like:
+                base = [sentence for sentence in existing if sentence != removable]
+                for score, idx, candidate in sorted(ranked, key=lambda item: (-item[0], item[1])):
+                    if candidate in base:
+                        continue
+                    if _near_duplicate_in_base(candidate, base):
+                        continue
+                    if self._title_overlap(candidate, source_title) >= self._title_overlap(removable, source_title):
+                        continue
+                    proposal_sentences = sorted(
+                        base + [candidate],
+                        key=lambda sentence: source_positions.get(sentence, 999),
+                    )
+                    proposal = " ".join(proposal_sentences)
+                    if len(proposal) > max_chars:
+                        continue
+                    out = proposal
+                    existing = proposal_sentences
+                    break
+                else:
+                    continue
+                break
+
+            if len(existing) >= 3:
+                removable = max(existing, key=lambda sentence: self._title_overlap(sentence, source_title))
+                if self._title_overlap(removable, source_title) >= 4:
+                    base = [sentence for sentence in existing if sentence != removable]
+                    for score, idx, candidate in sorted(ranked, key=lambda item: (-item[0], item[1])):
+                        if candidate in base:
+                            continue
+                        if _near_duplicate_in_base(candidate, base):
+                            continue
+                        if self._title_overlap(candidate, source_title) > 2:
+                            continue
+                        proposal_sentences = sorted(
+                            base + [candidate],
+                            key=lambda sentence: source_positions.get(sentence, 999),
+                        )
+                        proposal = " ".join(proposal_sentences)
+                        if len(proposal) > max_chars:
+                            continue
+                        out = proposal
+                        existing = proposal_sentences
+                        break
+
+        return self._normalize_body_punctuation(out)
+
+    def _rebalance_for_consequence_coverage(
+        self,
+        body: str,
+        source_title: str,
+        source_body: str,
+        min_chars: int,
+        max_chars: int,
+    ) -> str:
+        sentences = self._split_sentences(self._normalize_body_punctuation(body))
+        if len(sentences) < 3:
+            return body
+
+        removable = max(sentences, key=lambda sentence: self._title_overlap(sentence, source_title))
+        if self._title_overlap(removable, source_title) < 3:
+            return body
+
+        base = [sentence for sentence in sentences if sentence != removable]
+        consequence_candidates: List[tuple[int, int, str]] = []
+        for idx, sentence in enumerate(self._split_sentences(source_body)):
+            normalized = self._normalize_body_punctuation(sentence)
+            low = normalized.lower()
+            if len(normalized) < 35:
+                continue
+            if not any(token in low for token in self._CONSEQUENCE_TOKENS):
+                continue
+            if self._title_overlap(normalized, source_title) > 2:
+                continue
+            if any(SequenceMatcher(None, normalized.lower(), existing.lower()).ratio() >= 0.9 for existing in base):
+                continue
+            score = self._sentence_quality_score(normalized, title=source_title, position=idx) + 4
+            consequence_candidates.append((score, idx, normalized))
+
+        if not consequence_candidates:
+            return body
+
+        source_positions = {
+            self._normalize_body_punctuation(sentence): idx
+            for idx, sentence in enumerate(self._split_sentences(source_body))
+        }
+        for _, _, candidate in sorted(consequence_candidates, key=lambda item: (-item[0], item[1])):
+            proposal_sentences = sorted(
+                base + [candidate],
+                key=lambda sentence: source_positions.get(sentence, 999),
+            )
+            proposal = " ".join(proposal_sentences)
+            if len(proposal) > max_chars:
+                continue
+            if len(proposal) < max(220, min_chars - 60):
+                continue
+            return self._normalize_body_punctuation(proposal)
+        return body
+
     def _sentence_quality_score(self, sentence: str, title: str = "", position: int = 0) -> int:
         normalized = self._normalize_body_punctuation(sentence)
         signature = self._sentence_signature(normalized)
@@ -973,15 +1140,29 @@ Headline style patterns (factual, high-click, non-clickbait):
 
         overlap = self._title_overlap(normalized, title)
         if overlap >= max(4, min(len(signature), 6)):
-            score -= 3
+            score -= 8
+        if overlap >= max(6, min(len(signature), 8)):
+            score -= 4
         return score
 
     def _is_duplicate_sentence(self, candidate: str, existing: List[str]) -> bool:
-        candidate_sig = self._sentence_signature(candidate)
+        candidate_norm = self._normalize_body_punctuation(candidate)
+        candidate_sig = self._sentence_signature(candidate_norm)
         if not candidate_sig:
             return True
         for sentence in existing:
-            overlap = len(candidate_sig & self._sentence_signature(sentence))
+            existing_norm = self._normalize_body_punctuation(sentence)
+            if candidate_norm.lower() == existing_norm.lower():
+                return True
+
+            shorter, longer = sorted((candidate_norm.lower(), existing_norm.lower()), key=len)
+            if len(shorter) >= 40 and shorter in longer:
+                return True
+
+            if SequenceMatcher(None, candidate_norm.lower(), existing_norm.lower()).ratio() >= 0.86:
+                return True
+
+            overlap = len(candidate_sig & self._sentence_signature(existing_norm))
             if overlap >= max(4, min(len(candidate_sig), 6)):
                 return True
         return False
@@ -1018,6 +1199,7 @@ Headline style patterns (factual, high-click, non-clickbait):
             return []
 
         chosen: List[str] = []
+        sentence_positions = {sentence: idx for idx, sentence in enumerate(sentences)}
 
         def _select_best(pool: List[tuple[int, int, str]]) -> Optional[str]:
             for _, _, candidate in sorted(pool, key=lambda item: (-item[0], item[1])):
@@ -1043,6 +1225,27 @@ Headline style patterns (factual, high-click, non-clickbait):
         _select_best(lead_pool)
         _select_best(context_pool)
         _select_best(consequence_pool)
+
+        if len(chosen) >= 3 and self._title_overlap(chosen[0], source_title) >= 4:
+            base = chosen[1:]
+            replacement_options: List[tuple[int, int, List[str]]] = []
+            for idx, sentence in enumerate(sentences):
+                if sentence == chosen[0]:
+                    continue
+                if self._is_duplicate_sentence(sentence, base):
+                    continue
+                proposal_sentences = sorted(base + [sentence], key=lambda item: sentence_positions.get(item, 999))
+                proposal = " ".join(proposal_sentences)
+                if len(proposal) > max_chars:
+                    continue
+                score = self._sentence_quality_score(sentence, title=source_title, position=idx)
+                score -= self._title_overlap(sentence, source_title) * 2
+                if any(token in sentence.lower() for token in self._CONSEQUENCE_TOKENS):
+                    score += 3
+                replacement_options.append((score, idx, proposal_sentences))
+
+            if replacement_options:
+                chosen = sorted(replacement_options, key=lambda item: (-item[0], item[1]))[0][2]
 
         for candidate in self._source_sentence_candidates(source_title, source_body, chosen):
             if self._is_duplicate_sentence(candidate, chosen):
@@ -1252,6 +1455,21 @@ Headline style patterns (factual, high-click, non-clickbait):
             body = self._clean_body_copy(body, source_title, source_body)
             body = self._trim_body_to_band(body, max_chars=max_chars, target_chars=target_chars)
             body = self._ensure_complete_body(body, source_title, source_body, min_chars=min_chars, max_chars=max_chars)
+        body = self._strengthen_body_coverage(
+            body,
+            source_title,
+            source_body,
+            min_chars=min_chars,
+            target_chars=target_chars,
+            max_chars=max_chars,
+        )
+        body = self._rebalance_for_consequence_coverage(
+            body,
+            source_title,
+            source_body,
+            min_chars=min_chars,
+            max_chars=max_chars,
+        )
         if len(body) < min_chars:
             tail = self._source_context_tail(source_title, source_body)
             proposal = self._normalize_body_punctuation(f"{body} {tail}".strip())
@@ -1274,7 +1492,7 @@ Headline style patterns (factual, high-click, non-clickbait):
         title = self._title_from_source(source_title, max_title=max_title, source_body=source_body)
         if self._title_too_close_to_source(title, source_title):
             title = self._retitle_from_source(source_title, source_body, max_title=max_title)
-        if len(title) < min_title or not self._has_title_hook(title):
+        if len(title) < min_title:
             title = self._boost_title_punch(title or source_title, source_title, source_body, max_title=max_title)
         body = self._fallback_body(source_title, source_body, target_chars=target_body, min_chars=min_body, max_chars=max_body)
         title = self._enforce_cautious_title(
@@ -1284,9 +1502,19 @@ Headline style patterns (factual, high-click, non-clickbait):
             max_title=max_title,
         )
         body = self._clean_body_copy(body, source_title, source_body)
+        body = self._fit_body_length(
+            body,
+            source_title,
+            source_body,
+            target_chars=target_body,
+            min_chars=min_body,
+            max_chars=max_body,
+        )
+        body = self._clean_body_copy(body, source_title, source_body)
         if not self._passes_credibility_checks(title, body, source_title, source_body):
             title = self._retitle_from_source(source_title, source_body, max_title=max_title)
-            body = self._clean_body_copy(source_body[:max_body], source_title, source_body)
+            body = self._fallback_body(source_title, source_body, target_chars=target_body, min_chars=min_body, max_chars=max_body)
+            body = self._clean_body_copy(body, source_title, source_body)
         if len(title) < min_title or len(body) < min_body:
             return None
         if not self._passes_credibility_checks(title, body, source_title, source_body):
@@ -1294,15 +1522,14 @@ Headline style patterns (factual, high-click, non-clickbait):
         return {"title": title, "body": body}
 
     def summarize(self, title: str, body: str, max_retries: int = 2) -> Optional[Dict[str, str]]:
-        min_title = 36
-        max_title = 68
-        target_body = 348
-        min_body = 310
-        max_body = 370
-        soft_min_body = 260
+        min_title = 16
+        max_title = 80
+        target_body = 320
+        min_body = 280
+        max_body = 380
 
         article_title = " ".join((title or "").split())
-        article_body = " ".join((body or "").split())[:2600]
+        article_body = " ".join((body or "").split())[:5200]
         if not article_title or not article_body:
             return None
         if not self.client or not self.client.available:
@@ -1320,12 +1547,12 @@ Headline style patterns (factual, high-click, non-clickbait):
         credibility_note = self._credibility_prompt_note(article_title, article_body)
 
         system_msg = (
-            "You are a disciplined newsroom editor. "
+            "You are a disciplined Shortly editor. "
             "Write compact factual copy using only the source. "
-            "Do not invent, speculate, or add stylistic filler."
+            "Do not invent, speculate, add opinion, or add stylistic filler."
         )
 
-        prompt = f"""Create a short English news card from the source.
+        prompt = f"""Create a Shortly-style English article card from the source.
 
 Source Title: {article_title}
 Source Text: {article_body}
@@ -1335,18 +1562,17 @@ Source Text: {article_body}
 
 Requirements:
 - Output JSON only: {{"title":"...","body":"..."}}
-- Title: 36-68 characters, sentence case, factual and direct.
-- Title should say who did what and why it matters.
-- Write the title like a fresh desk rewrite, not a lifted source line.
-- Prefer named actors and active verbs over vague labels and static nouns.
-- {self._NEWSROOM_PATTERN_NOTE}
-- Avoid weak phrasing like "warns that", "under agreement", "full schedule", "actions", or "remain missing" when a sharper rewrite is possible.
+- Title: 16-80 characters, sentence case, factual and direct.
+- Title should clearly state the core update.
+- Use sentence case with capitalization only for proper nouns and standard acronyms.
+- Avoid filler words when a cleaner headline is possible, but do not make the headline sound forced.
 - Never cut off a word to fit the limit. Rewrite shorter instead.
 - Headline must be materially reworded from the source headline. Do not echo or lightly trim source wording.
-- Body: 320-370 characters, ideally near 350, in 3-4 clean sentences.
+- Body: 240-380 characters, in 3-5 short clean sentences.
 - Sentence 1: core development.
 - Sentence 2: context or scale.
 - Sentence 3: consequence or next stake.
+- Keep every sentence useful. Remove any line that does not add value.
 - Use only facts present in the source.
 - Rewrite the body in fresh wording. Do not copy source sentences verbatim unless a name or figure leaves no natural alternative.
 - Prefer specific names when the source gives them. Avoid vague labels like "the US president" if the source names Trump.
@@ -1354,10 +1580,11 @@ Requirements:
 - Preserve exact technical designations from the source, such as aircraft, ship, missile, or military system identifiers.
 - If the source says images, videos, social posts, or reports appear to show something, keep that uncertainty explicit. Do not turn it into confirmed fact.
 - Never add a verification claim, investigation claim, or confirmation claim unless the source explicitly gives it.
-- No source names, no publisher names, no clickbait phrases, no rhetorical questions.
+- No source names, no publisher names, no clickbait phrases, no exclamation marks, no opinions.
 - No repeated filler such as "this development", "meanwhile", "in a major move", "here is why".
 - Avoid keeping the same sentence order and wording as the source when a clean rewrite is possible.
 - Do not repeat the same fact in the final sentence and do not add generic explainer lines like "it is a vital waterway".
+- Read the full source text before writing. Use later source details when they add important context, scale, timeline, or consequence.
 - End with a complete sentence.
 """
 
@@ -1378,7 +1605,7 @@ Requirements:
                             "content": (
                                 "Rewrite to be cleaner and more concrete. "
                                 "Use only source facts, keep the title direct, and make the body sentence-driven and complete. "
-                                "Title 36-68 chars, body 320-370 chars, no filler, no publisher names; JSON only. "
+                                "Title 16-80 chars, body 280-380 chars, no filler, no publisher names, no opinions; JSON only. "
                                 f"{retry_feedback}".strip()
                             ),
                         }
@@ -1445,7 +1672,7 @@ Requirements:
                     title_out = self._smart_truncate_title(title_out, max_title)
                 if len(title_out) < min_title:
                     retry_feedback = (
-                        "Title is too short. Expand it to 36-68 characters with a named actor, active verb, and clear stake."
+                        "Title is too short. Expand it to 16-80 characters while staying factual and direct."
                     )
                     if attempt < (max_retries - 1):
                         continue
@@ -1460,7 +1687,7 @@ Requirements:
                     self.logger.warning("Title too close to source wording, retrying...")
                     if attempt < (max_retries - 1):
                         retry_feedback = (
-                            "Headline is too close to the source wording. Rebuild it with different phrasing and stronger verbs."
+                            "Headline is too close to the source wording. Rebuild it with different phrasing while keeping it factual and restrained."
                         )
                         continue
                     title_out = self._retitle_from_source(article_title, article_body, max_title=max_title)
@@ -1486,26 +1713,16 @@ Requirements:
                         body_out = expanded_body
                         body_is_complete = body_out.endswith((".", "!", "?")) and not self._has_dangling_tail(body_out)
 
-                allow_soft_short_body = soft_min_body <= len(body_out) < min_body and body_is_complete
-                if len(body_out) > max_body or (len(body_out) < min_body and not allow_soft_short_body):
+                if len(body_out) > max_body or len(body_out) < min_body:
                     self.logger.warning(
                         f"Summary length out of range (title={len(title_out)}, body={len(body_out)}), retrying..."
                     )
                     if attempt < (max_retries - 1):
                         retry_feedback = (
-                            "Keep the body in the 320-370 character band and keep the title in the 36-68 character band."
+                            "Keep the body in the 280-380 character band and keep the title in the 16-80 character band."
                         )
                         continue
                     break
-                if allow_soft_short_body:
-                    self.logger.warning(
-                        f"Summary body below target band but complete; accepting softer fallback (body={len(body_out)})"
-                    )
-
-                if not self._has_title_hook(title_out):
-                    boosted_title = self._boost_title_punch(title_out, article_title, article_body, max_title=max_title)
-                    if len(boosted_title) >= min_title:
-                        title_out = boosted_title
 
                 if self._looks_template_body(body_out):
                     self.logger.warning("Summary body sounds template-like, retrying...")
@@ -1533,9 +1750,27 @@ Requirements:
                         max_chars=max_body,
                     )
                     body_out = self._clean_body_copy(body_out, article_title, article_body)
+                    body_out = self._fit_body_length(
+                        body_out,
+                        article_title,
+                        article_body,
+                        target_chars=target_body,
+                        min_chars=min_body,
+                        max_chars=max_body,
+                    )
+                    body_out = self._clean_body_copy(body_out, article_title, article_body)
 
                 title_out = self._restore_designations(title_out, article_title, article_body)
                 title_out = self._enforce_cautious_title(title_out, article_title, article_body, max_title)
+                body_out = self._clean_body_copy(body_out, article_title, article_body)
+                body_out = self._fit_body_length(
+                    body_out,
+                    article_title,
+                    article_body,
+                    target_chars=target_body,
+                    min_chars=min_body,
+                    max_chars=max_body,
+                )
                 body_out = self._clean_body_copy(body_out, article_title, article_body)
 
                 if not self._passes_credibility_checks(title_out, body_out, article_title, article_body):

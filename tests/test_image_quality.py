@@ -142,7 +142,7 @@ class ImageQualityPipelineTests(unittest.TestCase):
         self.assertEqual(result.local_path, "C:\\fake.jpg")
         self.assertIn("vision_low_quality", result.rejection_reasons)
 
-    def test_static_fallback_is_blocked_when_vision_marks_image_irrelevant(self):
+    def test_static_fallback_is_allowed_when_vision_marks_image_irrelevant(self):
         static_probe = {
             "ok": True,
             "score": 0.82,
@@ -161,8 +161,8 @@ class ImageQualityPipelineTests(unittest.TestCase):
             patch.object(ImageQualityPipeline, "_store_image", return_value="C:\\fake.jpg"):
             result = self.pipeline.select_best("https://example.com/a", "Damaged aircraft at Saudi base")
 
-        self.assertFalse(result.passed)
-        self.assertTrue(result.needs_image)
+        self.assertTrue(result.passed)
+        self.assertEqual(result.local_path, "C:\\fake.jpg")
         self.assertIn("vision_irrelevant", result.rejection_reasons)
 
 

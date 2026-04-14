@@ -1,5 +1,8 @@
 ﻿import unittest
 
+import json
+import logging
+
 from core.intelligence.summarize import Summarizer
 
 
@@ -406,6 +409,70 @@ class SummarizerStyleExampleTests(unittest.TestCase):
         cleaned = self.summarizer._remove_title_commas("Akhtar blasts India, claims cricket imbalance")
         self.assertNotIn(",", cleaned)
         self.assertEqual(cleaned, "Akhtar blasts India: claims cricket imbalance")
+
+    def test_summarize_includes_late_source_details_in_prompt(self):
+        class RecordingClient:
+            available = True
+
+            def __init__(self):
+                self.prompt = ""
+
+            def generate_json(self, prompt, **kwargs):
+                self.prompt = prompt
+                return json.dumps(
+                    {
+                        "title": "State unveils new policy roadmap",
+                        "body": (
+                            "The state unveiled a new policy roadmap on Wednesday after a cabinet review. "
+                            "Officials said the plan covers funding, rollout and oversight across departments. "
+                            "The move is expected to shape implementation in the coming weeks."
+                        ),
+                    }
+                )
+
+        summarizer = object.__new__(Summarizer)
+        summarizer.logger = logging.getLogger("test_summarizer_prompt")
+        summarizer.client = RecordingClient()
+        summarizer._training_examples = []
+        late_token = "LATE_DETAIL_TOKEN_FOR_SUMMARY"
+        long_body = ("Earlier context " * 260) + f"{late_token} final consequence and implementation detail."
+
+        summarizer.summarize("State policy update", long_body, max_retries=1)
+        self.assertIn(late_token, summarizer.client.prompt)
+
+    def test_summarize_rejects_too_short_model_body_and_falls_back_to_fuller_copy(self):
+        class ShortBodyClient:
+            available = True
+
+            def generate_json(self, prompt, **kwargs):
+                return json.dumps(
+                    {
+                        "title": "Netflix sets Hyderabad office plan",
+                        "body": (
+                            "Netflix will open a new office in Hyderabad as its second facility in India. "
+                            "The 30,000 sq ft centre will be inaugurated on March 12."
+                        ),
+                    }
+                )
+
+        summarizer = object.__new__(Summarizer)
+        summarizer.logger = logging.getLogger("test_summarizer_short_body")
+        summarizer.client = ShortBodyClient()
+        summarizer._training_examples = []
+
+        result = summarizer.summarize(
+            "Netflix to open office in Hyderabad",
+            (
+                "Netflix is set to establish a new office in Hyderabad, marking its second facility in India after Mumbai. "
+                "The 30,000 sq ft centre will be inaugurated on March 12 by CM Revanth Reddy. "
+                "The hub will focus on animation, visual effects and digital content production. "
+                "The move is expected to boost the AVGC sector while creating new job opportunities for skilled youth."
+            ),
+            max_retries=2,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertGreaterEqual(len(result["body"]), 280)
 
 
 if __name__ == "__main__":

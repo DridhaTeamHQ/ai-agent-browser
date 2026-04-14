@@ -180,7 +180,6 @@ class ImageQualityPipeline:
         static_passes = static_passes[: max(1, self.max_vision_candidates)]
 
         best: Optional[Tuple[ImageCandidate, Dict[str, object], float, Dict[str, object]]] = None
-        vision_rejection_reasons: List[str] = []
         for cand, probe in static_passes:
             vision = (
                 self._vision_assess(probe["bytes"], title, cand.context_text, article_context or "")
@@ -198,7 +197,6 @@ class ImageQualityPipeline:
             if not bool(vision.get("usable", True)):
                 vision_reason = str(vision.get("reason", "vision_rejected"))
                 rejections.append(vision_reason)
-                vision_rejection_reasons.append(vision_reason)
                 continue
 
             static_score = float(probe["score"])
@@ -213,11 +211,7 @@ class ImageQualityPipeline:
         if not best:
             # Publish-first fallback: if static checks passed, keep the strongest static image
             # instead of dropping the article on the vision pass.
-            allow_static_fallback = not any(
-                reason in {"vision_irrelevant", "vision_text_overlay", "logo_or_watermark_detected"}
-                for reason in vision_rejection_reasons
-            )
-            if static_passes and allow_static_fallback:
+            if static_passes:
                 cand, probe = static_passes[0]
                 path = self._store_image(probe["bytes"], title)
                 return ImageDecision(
@@ -680,17 +674,8 @@ class ImageQualityPipeline:
                 continue
 
             relevance = self._relevance_score(probe_url, title, candidate.context_text, article_context)
-            host_low = urlparse(probe_url).netloc.lower()
-            relaxed_news_cdn = (
-                ("static.toiimg.com" in host_low)
-                or ("th-i.thgim.com" in host_low)
-                or ("i.guim.co.uk" in host_low)
-                or ("aljazeera.com" in host_low)
-                or ("ichef.bbci.co.uk" in host_low)
-                or ("tosshub.com" in host_low)
-            )
-            # Keep strict relevance checks only for noisy discovery paths and non-news CDN links.
-            if relevance < min_relevance and candidate.source in {"body", "srcset", "schema"} and not relaxed_news_cdn:
+            # Keep strict relevance checks on noisier discovery sources.
+            if relevance < min_relevance and candidate.source in {"body", "srcset", "schema"}:
                 failures.append("low_relevance")
                 continue
 
@@ -815,12 +800,8 @@ class ImageQualityPipeline:
 
             min_vision_relevance = float(self.thresholds.get("min_vision_relevance", 0.4))
             if (not is_relevant) or relevance < min_vision_relevance:
-                # Allow strong-quality images with moderate relevance instead of hard rejection.
-                if quality >= 0.68 and relevance >= 0.18 and (not has_logo) and (not has_watermark):
-                    usable = True
-                else:
-                    usable = False
-                    reason = "vision_irrelevant"
+                usable = False
+                reason = "vision_irrelevant"
 
             reason_low = reason.lower()
             if any(tok in reason_low for tok in {"logo", "watermark", "channel bug", "corner bug", "publisher mark"}):

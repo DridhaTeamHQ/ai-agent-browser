@@ -74,6 +74,44 @@ INTERNATIONAL_MARKERS = [
     "bombing", "explosion", "fleet", "navy", "air force",
 ]
 
+MIN_TITLE_CHARS = 16
+MIN_BODY_CHARS = 120
+IRRELEVANT_TEXT_TOKENS = (
+    "advertisement",
+    "subscribe to",
+    "follow us on",
+    "click here",
+    "read more",
+)
+LOW_VALUE_URL_PATTERNS = (
+    "/authors/",
+    "/author/",
+    "/opinion/",
+    "/opinions/",
+    "/education/",
+    "/live-updates/",
+    "/live-blog/",
+    "/liveblog/",
+)
+LOW_VALUE_TITLE_PATTERNS = (
+    "opinion |",
+    "live:",
+    "live updates",
+    "how to download",
+    "when and how to",
+    "check official websites",
+    "view result",
+    "result to be out",
+    "trailer",
+    "box office",
+    "dating",
+    "relationship",
+    "wife",
+    "husband",
+    "girlfriend",
+    "boyfriend",
+)
+
 
 def _is_international_source(source_name: str) -> bool:
     source = (source_name or "").strip().lower()
@@ -225,8 +263,34 @@ class CategoryAgent:
         hints = CATEGORY_SOURCE_HINTS.get(category, [])
         return any(h in low for h in hints)
 
+    def _category_signal_score(self, text: str, category: CategoryName) -> int:
+        keywords = CATEGORY_KEYWORDS.get(category, [])
+        return sum(1 for kw in keywords if self._has_keyword(text, kw))
+
+    def _is_content_relevant(self, article: IngestedArticle) -> bool:
+        title = " ".join((article.title or "").split())
+        body = " ".join((article.body or "").split())
+        url = str(article.url or "").lower()
+        if len(title) < MIN_TITLE_CHARS:
+            return False
+        if len(body) < MIN_BODY_CHARS:
+            return False
+
+        low = f"{title} {body}".lower()
+        if any(token in low for token in IRRELEVANT_TEXT_TOKENS):
+            return False
+        if any(pattern in url for pattern in LOW_VALUE_URL_PATTERNS):
+            return False
+        if any(pattern in low for pattern in LOW_VALUE_TITLE_PATTERNS):
+            return False
+        return True
+
     def _matches_category(self, article: IngestedArticle) -> bool:
-        text = f"{article.title} {article.body} {article.url}".lower()
+        if not self._is_content_relevant(article):
+            return False
+
+        content_text = f"{article.title} {article.body}".lower()
+        text = f"{content_text} {article.url}".lower()
         source_low = str(article.source or "").lower()
         source_url_low = str(article.source_url or "").lower()
 
@@ -249,42 +313,47 @@ class CategoryAgent:
                 return True
             if is_international_source and not (has_india_marker and is_local_politics):
                 return True
-            return any(self._has_keyword(text, kw) for kw in CATEGORY_KEYWORDS["international"])
+            return any(self._has_keyword(content_text, kw) for kw in CATEGORY_KEYWORDS["international"])
 
         if self.category == "national":
             if self._source_url_matches_category(source_url_low, "national"):
                 if is_international_theme and not is_local_politics:
                     return False
-                return True
+                return has_india_marker or self._category_signal_score(text, "national") > 0
             if is_india_source or has_india_marker:
                 if is_international_theme and not is_local_politics:
                     return False
                 return True
-            return any(self._has_keyword(text, kw) for kw in CATEGORY_KEYWORDS["national"])
+            return any(self._has_keyword(content_text, kw) for kw in CATEGORY_KEYWORDS["national"])
 
         if self.category == "environment":
-            return self._source_url_matches_category(source_url_low, "environment") or any(
-                self._has_keyword(text, kw) for kw in CATEGORY_KEYWORDS["environment"]
+            signal = self._category_signal_score(content_text, "environment")
+            return (self._source_url_matches_category(source_url_low, "environment") and signal > 0) or any(
+                self._has_keyword(content_text, kw) for kw in CATEGORY_KEYWORDS["environment"]
             )
 
         if self.category == "sports":
-            return self._source_url_matches_category(source_url_low, "sports") or any(
-                self._has_keyword(text, kw) for kw in CATEGORY_KEYWORDS["sports"]
+            signal = self._category_signal_score(content_text, "sports")
+            return (self._source_url_matches_category(source_url_low, "sports") and signal > 0) or any(
+                self._has_keyword(content_text, kw) for kw in CATEGORY_KEYWORDS["sports"]
             )
 
         if self.category == "crime":
-            return self._source_url_matches_category(source_url_low, "crime") or any(
-                self._has_keyword(text, kw) for kw in CATEGORY_KEYWORDS["crime"]
+            signal = self._category_signal_score(content_text, "crime")
+            return (self._source_url_matches_category(source_url_low, "crime") and signal > 0) or any(
+                self._has_keyword(content_text, kw) for kw in CATEGORY_KEYWORDS["crime"]
             )
 
         if self.category == "tech":
-            return self._source_url_matches_category(source_url_low, "tech") or any(
-                self._has_keyword(text, kw) for kw in CATEGORY_KEYWORDS["tech"]
+            signal = self._category_signal_score(content_text, "tech")
+            return (self._source_url_matches_category(source_url_low, "tech") and signal > 0) or any(
+                self._has_keyword(content_text, kw) for kw in CATEGORY_KEYWORDS["tech"]
             )
 
         if self.category == "business":
-            return self._source_url_matches_category(source_url_low, "business") or any(
-                self._has_keyword(text, kw) for kw in CATEGORY_KEYWORDS["business"]
+            signal = self._category_signal_score(content_text, "business")
+            return (self._source_url_matches_category(source_url_low, "business") and signal > 0) or any(
+                self._has_keyword(content_text, kw) for kw in CATEGORY_KEYWORDS["business"]
             )
 
         self.logger.warning(f"No keyword profile for category '{self.category}', defaulting to False")

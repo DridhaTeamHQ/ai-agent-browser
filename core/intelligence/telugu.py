@@ -40,11 +40,8 @@ class TeluguWriter:
         self.client = GeminiClient()
 
     def write(self, english_title: str, english_body: str, max_retries: int = 3) -> Optional[Dict[str, str]]:
-        target_body_chars = 330
         min_body_chars = 299
         max_body_chars = 350
-        min_title_purity = 65.0
-        min_body_purity = 78.0
 
         prompt = f"""You are a senior Telugu newsroom editor.
 
@@ -81,154 +78,54 @@ Return JSON only:
         )
 
         last_content = ""
-        last_body = ""
-        best_candidate: Optional[Dict[str, str]] = None
-        best_score = -1.0
 
         if not self.client or not self.client.available:
             self.logger.error("Gemini client unavailable for Telugu generation")
             return None
 
-        for attempt in range(max_retries):
-            try:
-                messages = [{"role": "system", "content": system_msg}, {"role": "user", "content": prompt}]
-                if attempt > 0:
-                    messages.append({"role": "assistant", "content": last_content})
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                f"Rewrite. Body must be {min_body_chars}-{max_body_chars} chars with 3-5 complete sentences. "
-                                f"Previous body length: {len(last_body)}. "
-                                "Remove all unnecessary English words and fix Telugu sentence flow. "
-                                "Return JSON only."
-                            ),
-                        }
-                    )
-
-                combined_prompt = "\n\n".join(
-                    f"{message['role'].upper()}:\n{message['content']}" for message in messages
-                )
-                last_content = self.client.generate_json(
-                    combined_prompt,
-                    system_instruction=system_msg,
-                    temperature=0.3,
-                    max_output_tokens=800,
-                    schema=self._TITLE_BODY_JSON_SCHEMA,
-                )
-                raw = last_content
-                if "```" in raw:
-                    raw = raw.split("```")[1]
-                    if raw.startswith("json"):
-                        raw = raw[4:]
-
-                result = json.loads(raw)
-                title = self._sanitize_text((result.get("title") or "").strip())
-                body = self._sanitize_text((result.get("body") or "").strip())
-                last_body = body
-                allowed_english = self._derive_allowed_english(english_title, english_body)
-
-                if self._has_disallowed_english(title, allowed_english) or self._has_disallowed_english(body, allowed_english):
-                    purified = self._purify_telugu_copy(title, body, english_title, english_body)
-                    if purified:
-                        title = self._sanitize_text(purified.get("title", title))
-                        body = self._sanitize_text(purified.get("body", body))
-
-                if len(body) < min_body_chars:
-                    self.logger.warning(f"Attempt {attempt + 1}: Body too short ({len(body)} chars), trying expansion...")
-                    expanded = self._expand_telugu_body(body, title, english_body)
-                    if expanded:
-                        body = self._fit_body_length(self._sanitize_text(expanded), min_body_chars, max_body_chars)
-                        self.logger.info(f"Expanded to {len(body)} chars")
-
-                title = self._sanitize_title(title)
-                if len(title) > 80:
-                    title = title[:80].rstrip(" ,.-")
-                    title = self._sanitize_title(title)
-
-                body = self._fit_body_length(body, min_body_chars, max_body_chars)
-
-                title_pct = self._telugu_percentage(title)
-                body_pct = self._telugu_percentage(body)
-                body_eng_count, body_eng_ratio = self._english_token_stats(body, allowed_english)
-                title_eng_count, _title_eng_ratio = self._english_token_stats(title, allowed_english)
-
-                score = (body_pct * 0.6) + (title_pct * 0.25) + (max(0.0, 100.0 - (body_eng_ratio * 400.0)) * 0.15)
-                if min_body_chars <= len(body) <= max_body_chars and score > best_score:
-                    best_score = score
-                    best_candidate = {"title": title, "body": body}
-
-                if title_pct < min_title_purity or body_pct < min_body_purity:
-                    self.logger.warning(
-                        f"Attempt {attempt + 1} rejected: low Telugu purity (title={title_pct:.0f}%, body={body_pct:.0f}%)"
-                    )
-                    continue
-
-                if title_eng_count > 2 or body_eng_count > 4 or body_eng_ratio > 0.06:
-                    self.logger.warning(
-                        f"Attempt {attempt + 1} rejected: too many English words (title={title_eng_count}, body={body_eng_count}, ratio={body_eng_ratio:.2f})"
-                    )
-                    continue
-
-                if self._has_disallowed_english(title, allowed_english) or self._has_disallowed_english(body, allowed_english):
-                    self.logger.warning(f"Attempt {attempt + 1} rejected: disallowed English lexical words present")
-                    continue
-
-                if len(body) < min_body_chars or len(body) > max_body_chars:
-                    continue
-                if not body.endswith((".", "!", "?", "\u0964")):
-                    self.logger.warning(f"Attempt {attempt + 1} rejected: body ends mid-sentence")
-                    continue
-
-                self.logger.info(f"Telugu generated: title={len(title)} body={len(body)}")
-                return {"title": title, "body": body}
-
-            except Exception as exc:
-                self.logger.warning(f"Attempt {attempt + 1} failed: {exc}")
-                continue
-
-        if best_candidate:
-            self.logger.warning("Strict checks exhausted; trying one final Telugu-only rewrite")
-            forced = self._purify_telugu_copy(
-                best_candidate.get("title", ""),
-                best_candidate.get("body", ""),
-                english_title,
-                english_body,
+        # Single-attempt mode: exactly one model call, no rewrite/expand retries.
+        try:
+            messages = [{"role": "system", "content": system_msg}, {"role": "user", "content": prompt}]
+            combined_prompt = "\n\n".join(
+                f"{message['role'].upper()}:\n{message['content']}" for message in messages
             )
-            if forced:
-                title = self._sanitize_title((forced.get("title") or "").strip())
-                body = self._sanitize_text((forced.get("body") or "").strip())
-                if len(body) < min_body_chars:
-                    expanded = self._expand_telugu_body(body, title, english_body)
-                    if expanded:
-                        body = self._fit_body_length(self._sanitize_text(expanded), min_body_chars, max_body_chars)
-                else:
-                    body = self._fit_body_length(body, min_body_chars, max_body_chars)
+            last_content = self.client.generate_json(
+                combined_prompt,
+                system_instruction=system_msg,
+                temperature=0.3,
+                max_output_tokens=800,
+                schema=self._TITLE_BODY_JSON_SCHEMA,
+            )
+            raw = last_content
+            if "```" in raw:
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
 
-                title_pct = self._telugu_percentage(title)
-                body_pct = self._telugu_percentage(body)
-                body_eng_count, body_eng_ratio = self._english_token_stats(body, allowed_english)
-                title_eng_count, _ = self._english_token_stats(title, allowed_english)
+            result = json.loads(raw)
+            title = self._sanitize_title((result.get("title") or "").strip())
+            body = self._sanitize_text((result.get("body") or "").strip())
 
-                if (
-                    title_pct >= min_title_purity
-                    and body_pct >= min_body_purity
-                    and title_eng_count <= 2
-                    and body_eng_count <= 4
-                    and body_eng_ratio <= 0.06
-                    and not self._has_disallowed_english(title, allowed_english)
-                    and not self._has_disallowed_english(body, allowed_english)
-                    and min_body_chars <= len(body) <= max_body_chars
-                    and body.endswith((".", "!", "?", "\u0964"))
-                ):
-                    self.logger.info(f"Telugu generated (final rewrite): title={len(title)} body={len(body)}")
-                    return {"title": title, "body": body}
+            if len(title) > 80:
+                title = title[:80].rstrip(" ,.-")
+                title = self._sanitize_title(title)
+            if body:
+                body = self._fit_body_length(body, min_chars=min_body_chars, max_chars=max_body_chars)
 
-            self.logger.error("Telugu generation failed strict validation after final rewrite")
-            return None
+            if not title:
+                title = self._sanitize_title(english_title[:80])
+            if not body:
+                body = self._fit_body_length(self._sanitize_text(english_body), min_chars=min_body_chars, max_chars=max_body_chars)
 
-        self.logger.error("Telugu generation failed all checks")
-        return None
+            self.logger.info(f"Telugu generated (single-attempt): title={len(title)} body={len(body)}")
+            return {"title": title, "body": body}
+        except Exception as exc:
+            self.logger.warning(f"Single-attempt Telugu generation failed: {exc}; using source fallback")
+            fallback_title = self._sanitize_title((english_title or "").strip()[:80])
+            fallback_body = self._fit_body_length(self._sanitize_text(english_body or ""), min_chars=min_body_chars, max_chars=max_body_chars)
+            if not fallback_title or not fallback_body:
+                return None
+            return {"title": fallback_title, "body": fallback_body}
 
     def _expand_telugu_body(self, short_body: str, title: str, english_context: str) -> Optional[str]:
         if not short_body:

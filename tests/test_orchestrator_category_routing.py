@@ -112,6 +112,13 @@ class OrchestratorCategoryRoutingTests(unittest.TestCase):
         self.assertIn("pentagon", query)
         self.assertNotIn("bbc", query.lower())
 
+    def test_sports_breaking_hashtags_use_trending_not_breaking(self):
+        orchestrator = object.__new__(HardenedOrchestrator)
+        tags = orchestrator._build_hashtags("Sports", "Virat Kohli hits century in IPL win", True)
+        self.assertIn("#sports", tags)
+        self.assertIn("#trending", tags)
+        self.assertNotIn("#breaking", tags)
+
 
 if __name__ == "__main__":
     unittest.main()
